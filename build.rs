@@ -4,6 +4,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // This prevents Cargo from rebuilding everything each time a non source code file changes.
     println!("cargo:rerun-if-changed=build.rs");
 
+    println!("cargo::rustc-check-cfg=cfg(docs_rs)");
+
     let target = std::env::var("TARGET")?;
 
     let output = std::env::var("OUT_DIR")?;
