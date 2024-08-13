@@ -27,6 +27,8 @@ use tokio::{
     time,
 };
 use tokio_stream::{wrappers::LinesStream, StreamExt};
+#[cfg(feature = "tracing")]
+use tracing::{Instrument, Span};
 
 lazy_static::lazy_static! {
     // TODO: Migrate to asynchronous code and remove runtime
@@ -480,14 +482,25 @@ impl<'w, 'pl> Command<'w, 'pl> {
             }
 
             let out = RUNTIME
-                .block_on(log_command(
-                    cmd,
-                    self.process_lines,
-                    capture,
-                    self.timeout,
-                    self.no_output_timeout,
-                    self.log_output,
-                ))
+                .block_on({
+                    // Conditionally capture the current span
+                    #[cfg(feature = "tracing")]
+                    let span = Span::current();
+
+                    let future = log_command(
+                        cmd,
+                        self.process_lines,
+                        capture,
+                        self.timeout,
+                        self.no_output_timeout,
+                        self.log_output,
+                    );
+
+                    #[cfg(feature = "tracing")]
+                    let future = future.instrument(span);
+
+                    future
+                })
                 .map_err(|e| {
                     error!("error running command: {}", e);
                     e
