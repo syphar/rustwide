@@ -17,6 +17,7 @@ use process_lines_actions::InnerState;
 use std::convert::AsRef;
 use std::env::consts::EXE_SUFFIX;
 use std::ffi::{OsStr, OsString};
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -103,6 +104,31 @@ pub enum CommandError {
     /// An I/O error occured while executing the command.
     #[error(transparent)]
     IO(#[from] std::io::Error),
+}
+
+impl From<CommandErrorWithOutput> for CommandError {
+    fn from(value: CommandErrorWithOutput) -> Self {
+        value.err
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+struct CommandErrorWithOutput {
+    #[source]
+    err: CommandError,
+    output: ProcessOutput,
+}
+
+impl Display for CommandErrorWithOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\n\nCaptured STDERR: \n{}\n\nCaptured STDOUT: \n{}",
+            self.err,
+            self.output.stderr_lines().join("\n"),
+            self.output.stdout_lines().join("\n")
+        )
+    }
 }
 
 /// Error happened while trying to kill a process.
@@ -356,7 +382,7 @@ impl<'w, 'pl> Command<'w, 'pl> {
     /// Even though the output will be captured and returned, if output logging is enabled (as it
     /// is by default) the output will be also logged. You can disable this behavior by calling the
     /// [`log_output`](struct.Command.html#method.log_output) method.
-    pub fn run_capture(self) -> Result<ProcessOutput, CommandError> {
+    pub fn run_capture(self) -> Result<ProcessOutput, CommandErrorWithOutput> {
         self.run_inner(true)
     }
 
@@ -519,6 +545,7 @@ impl From<InnerProcessOutput> for ProcessOutput {
 
 /// Output of a [`Command`](struct.Command.html) when it was executed with the
 /// [`run_capture`](struct.Command.html#method.run_capture) method.
+#[derive(Debug)]
 pub struct ProcessOutput {
     stdout: Vec<String>,
     stderr: Vec<String>,
