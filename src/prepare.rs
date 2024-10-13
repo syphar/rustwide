@@ -33,18 +33,20 @@ impl<'a> Prepare<'a> {
         }
     }
 
-    pub(crate) fn prepare(&mut self) -> anyhow::Result<()> {
-        self.krate.copy_source_to(self.workspace, self.source_dir)?;
-        self.validate_manifest()?;
+    pub(crate) async fn prepare(&mut self) -> anyhow::Result<()> {
+        self.krate
+            .copy_source_to(self.workspace, self.source_dir)
+            .await?;
+        self.validate_manifest().await?;
         self.remove_override_files()?;
         self.tweak_toml()?;
-        self.capture_lockfile()?;
-        self.fetch_deps()?;
+        self.capture_lockfile().await?;
+        self.fetch_deps().await?;
 
         Ok(())
     }
 
-    fn validate_manifest(&self) -> anyhow::Result<()> {
+    async fn validate_manifest(&self) -> anyhow::Result<()> {
         info!(
             "validating manifest of {} on toolchain {}",
             self.krate, self.toolchain
@@ -59,7 +61,8 @@ impl<'a> Prepare<'a> {
             .args(&["metadata", "--manifest-path", "Cargo.toml", "--no-deps"])
             .cd(self.source_dir)
             .log_output(false)
-            .run();
+            .run()
+            .await;
         if res.is_err() {
             return Err(PrepareError::InvalidCargoTomlSyntax.into());
         }
@@ -92,7 +95,7 @@ impl<'a> Prepare<'a> {
         Ok(())
     }
 
-    fn capture_lockfile(&mut self) -> anyhow::Result<()> {
+    async fn capture_lockfile(&mut self) -> anyhow::Result<()> {
         if self.source_dir.join("Cargo.lock").exists() {
             info!(
                 "crate {} already has a lockfile, it will not be regenerated",
@@ -126,6 +129,7 @@ impl<'a> Prepare<'a> {
                 }
             })
             .run_capture()
+            .await
         {
             Ok(_) => Ok(()),
             Err(CommandError::ExecutionFailed { status: _, stderr }) if yanked_deps => {
@@ -138,12 +142,12 @@ impl<'a> Prepare<'a> {
         }
     }
 
-    fn fetch_deps(&mut self) -> anyhow::Result<()> {
-        fetch_deps(self.workspace, self.toolchain, self.source_dir, &[])
+    async fn fetch_deps(&mut self) -> anyhow::Result<()> {
+        fetch_deps(self.workspace, self.toolchain, self.source_dir, &[]).await
     }
 }
 
-pub(crate) fn fetch_deps(
+pub(crate) async fn fetch_deps(
     workspace: &Workspace,
     toolchain: &Toolchain,
     source_dir: &Path,
@@ -156,7 +160,7 @@ pub(crate) fn fetch_deps(
     // Pass `-Zbuild-std` in case a build in the sandbox wants to use it;
     // build-std has to have the source for libstd's dependencies available.
     if !fetch_build_std_targets.is_empty() {
-        toolchain.add_component(workspace, "rust-src")?;
+        toolchain.add_component(workspace, "rust-src").await?;
         cmd = cmd.args(&["-Zbuild-std"]).env("RUSTC_BOOTSTRAP", "1");
     }
     for target in fetch_build_std_targets {
@@ -170,6 +174,7 @@ pub(crate) fn fetch_deps(
             }
         })
         .run_capture()
+        .await
     {
         Ok(_) => Ok(()),
         Err(CommandError::ExecutionFailed { status: _, stderr }) if missing_deps => {

@@ -3,6 +3,7 @@
 mod process_lines_actions;
 mod sandbox;
 
+use async_recursion::async_recursion;
 pub use process_lines_actions::ProcessLinesActions;
 pub use sandbox::*;
 
@@ -27,11 +28,6 @@ use tokio::{
     time,
 };
 use tokio_stream::{wrappers::LinesStream, StreamExt};
-
-lazy_static::lazy_static! {
-    // TODO: Migrate to asynchronous code and remove runtime
-    pub(super) static ref RUNTIME: Runtime = Runtime::new().expect("Failed to construct tokio runtime");
-}
 
 pub(crate) mod container_dirs {
     use lazy_static::lazy_static;
@@ -350,9 +346,8 @@ impl<'w, 'pl> Command<'w, 'pl> {
 
     /// Run the prepared command and return an error if it fails (for example with a non-zero exit
     /// code or a timeout).
-    pub fn run(self) -> Result<(), CommandError> {
-        self.run_inner(false)?;
-        Ok(())
+    pub async fn run(self) -> Result<(), CommandError> {
+        self.run_inner(false).await.map(|_| ())
     }
 
     /// Run the prepared command and return its output if it succeedes. If it fails (for example
@@ -361,11 +356,12 @@ impl<'w, 'pl> Command<'w, 'pl> {
     /// Even though the output will be captured and returned, if output logging is enabled (as it
     /// is by default) the output will be also logged. You can disable this behavior by calling the
     /// [`log_output`](struct.Command.html#method.log_output) method.
-    pub fn run_capture(self) -> Result<ProcessOutput, CommandError> {
-        self.run_inner(true)
+    pub async fn run_capture(self) -> Result<ProcessOutput, CommandError> {
+        self.run_inner(true).await
     }
 
-    fn run_inner(self, capture: bool) -> Result<ProcessOutput, CommandError> {
+    #[async_recursion]
+    async fn run_inner(self, capture: bool) -> Result<ProcessOutput, CommandError> {
         if let Some(mut builder) = self.sandbox {
             let workspace = self
                 .workspace
@@ -419,15 +415,17 @@ impl<'w, 'pl> Command<'w, 'pl> {
                 .env("CARGO_HOME", container_dirs::CARGO_HOME.to_str().unwrap())
                 .env("RUSTUP_HOME", container_dirs::RUSTUP_HOME.to_str().unwrap());
 
-            builder.run(
-                workspace,
-                self.timeout,
-                self.no_output_timeout,
-                self.process_lines,
-                self.log_output,
-                self.log_command,
-                capture,
-            )
+            builder
+                .run(
+                    workspace,
+                    self.timeout,
+                    self.no_output_timeout,
+                    self.process_lines,
+                    self.log_output,
+                    self.log_command,
+                    capture,
+                )
+                .await
         } else {
             let (binary, managed_by_rustwide) = match self.binary {
                 // global paths should never be normalized
@@ -484,19 +482,19 @@ impl<'w, 'pl> Command<'w, 'pl> {
                 info!("running `{}`", cmdstr);
             }
 
-            let out = RUNTIME
-                .block_on(log_command(
-                    cmd,
-                    self.process_lines,
-                    capture,
-                    self.timeout,
-                    self.no_output_timeout,
-                    self.log_output,
-                ))
-                .map_err(|e| {
-                    error!("error running command: {}", e);
-                    e
-                })?;
+            let out = log_command(
+                cmd,
+                self.process_lines,
+                capture,
+                self.timeout,
+                self.no_output_timeout,
+                self.log_output,
+            )
+            .await
+            .map_err(|e| {
+                error!("error running command: {}", e);
+                e
+            })?;
 
             if out.status.success() {
                 Ok(out.into())

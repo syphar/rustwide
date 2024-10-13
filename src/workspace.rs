@@ -135,7 +135,7 @@ impl WorkspaceBuilder {
 
     /// Initialize the workspace. This will create all the necessary local files and fetch the rest from the network. It's
     /// not unexpected for this method to take minutes to run on slower network connections.
-    pub fn init(self) -> anyhow::Result<Workspace> {
+    pub async fn init(self) -> anyhow::Result<Workspace> {
         std::fs::create_dir_all(&self.path).with_context(|| {
             format!(
                 "failed to create workspace directory: {}",
@@ -147,7 +147,7 @@ impl WorkspaceBuilder {
             let sandbox_image = if let Some(img) = self.sandbox_image {
                 img
             } else {
-                SandboxImage::remote(DEFAULT_SANDBOX_IMAGE)?
+                SandboxImage::remote(DEFAULT_SANDBOX_IMAGE).await?
             };
 
             let mut agent = attohttpc::Session::new();

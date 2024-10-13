@@ -11,14 +11,15 @@ pub(crate) struct CurrentContainer {
 }
 
 impl CurrentContainer {
-    pub(crate) fn detect(workspace: &Workspace) -> anyhow::Result<Option<Self>> {
-        if let Some(id) = probe_container_id(workspace)? {
+    pub(crate) async fn detect(workspace: &Workspace) -> anyhow::Result<Option<Self>> {
+        if let Some(id) = probe_container_id(workspace).await? {
             info!("inspecting the current container");
             let inspect = Command::new(workspace, "docker")
                 .args(&["inspect", &id])
                 .log_output(false)
                 .log_command(false)
-                .run_capture()?;
+                .run_capture()
+                .await?;
             let content = inspect.stdout_lines().join("\n");
             let mut metadata: Vec<Metadata> = serde_json::from_str(&content)?;
             if metadata.len() != 1 {
@@ -44,7 +45,7 @@ impl CurrentContainer {
 /// This function uses a simpler but slower method to get the ID: a file with a random string is
 /// created in the temp directory, the list of all the containers is fetched from Docker and then
 /// `cat` is executed inside each of them to check whether they have the same random string.
-pub(crate) fn probe_container_id(workspace: &Workspace) -> anyhow::Result<Option<String>> {
+pub(crate) async fn probe_container_id(workspace: &Workspace) -> anyhow::Result<Option<String>> {
     info!("detecting the ID of the container where rustwide is running");
 
     // Create the probe on the current file system
@@ -60,7 +61,8 @@ pub(crate) fn probe_container_id(workspace: &Workspace) -> anyhow::Result<Option
         .args(&["ps", "--format", "{{.ID}}", "--no-trunc"])
         .log_output(false)
         .log_command(false)
-        .run_capture()?;
+        .run_capture()
+        .await?;
     for id in out.stdout_lines() {
         info!("probing container id {}", id);
 
@@ -68,7 +70,8 @@ pub(crate) fn probe_container_id(workspace: &Workspace) -> anyhow::Result<Option
             .args(&["exec", id, "cat", probe_path_str])
             .log_output(false)
             .log_command(false)
-            .run_capture();
+            .run_capture()
+            .await;
         if let Ok([probed]) = res.as_ref().map(|out| out.stdout_lines()) {
             if *probed == probe_content {
                 info!("probe successful, this is container ID {}", id);

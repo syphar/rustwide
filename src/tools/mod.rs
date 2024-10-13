@@ -3,6 +3,7 @@ mod rustup;
 
 use crate::workspace::Workspace;
 use anyhow::bail;
+use async_trait::async_trait;
 use binary_crates::BinaryCrate;
 use log::info;
 use rustup::Rustup;
@@ -31,11 +32,12 @@ static INSTALLABLE_TOOLS: &[&dyn Tool] = &[
     &GIT_CREDENTIAL_NULL,
 ];
 
+#[async_trait]
 trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn is_installed(&self, workspace: &Workspace) -> anyhow::Result<bool>;
-    fn install(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()>;
-    fn update(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()>;
+    async fn install(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()>;
+    async fn update(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()>;
 
     fn binary_path(&self, workspace: &Workspace) -> PathBuf {
         crate::utils::normalize_path(&workspace.cargo_home().join("bin").join(format!(
@@ -46,14 +48,14 @@ trait Tool: Send + Sync {
     }
 }
 
-pub(crate) fn install(workspace: &Workspace, fast_install: bool) -> anyhow::Result<()> {
+pub(crate) async fn install(workspace: &Workspace, fast_install: bool) -> anyhow::Result<()> {
     for tool in INSTALLABLE_TOOLS {
         if tool.is_installed(workspace)? {
             info!("tool {} is installed, trying to update it", tool.name());
-            tool.update(workspace, fast_install)?;
+            tool.update(workspace, fast_install).await?;
         } else {
             info!("tool {} is missing, installing it", tool.name());
-            tool.install(workspace, fast_install)?;
+            tool.install(workspace, fast_install).await?;
 
             if !tool.is_installed(workspace)? {
                 bail!("tool {} is still missing after install", tool.name());

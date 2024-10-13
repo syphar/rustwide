@@ -40,7 +40,7 @@ impl DistToolchain {
         self.name.as_ref()
     }
 
-    fn init(&self, workspace: &Workspace) -> anyhow::Result<()> {
+    async fn init(&self, workspace: &Workspace) -> anyhow::Result<()> {
         info!("installing toolchain {}", self.name());
         Command::new(workspace, &RUSTUP)
             .args(&[
@@ -51,6 +51,7 @@ impl DistToolchain {
                 workspace.rustup_profile(),
             ])
             .run()
+            .await
             .with_context(|| format!("unable to install toolchain {} via rustup", self.name()))?;
 
         Ok(())
@@ -255,9 +256,9 @@ impl Toolchain {
     }
 
     /// Download and install the toolchain.
-    pub fn install(&self, workspace: &Workspace) -> anyhow::Result<()> {
+    pub async fn install(&self, workspace: &Workspace) -> anyhow::Result<()> {
         match &self.inner {
-            ToolchainInner::Dist(dist) => dist.init(workspace)?,
+            ToolchainInner::Dist(dist) => dist.init(workspace).await?,
             #[cfg(feature = "unstable-toolchain-ci")]
             ToolchainInner::CI(ci) => ci.init(workspace)?,
         }
@@ -266,44 +267,49 @@ impl Toolchain {
     }
 
     /// Download and install a component for the toolchain.
-    pub fn add_component(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
+    pub async fn add_component(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
         self.change_rustup_thing(workspace, RustupAction::Add, RustupThing::Component, name)
+            .await
     }
 
     /// Remove a component already installed for the toolchain.
-    pub fn remove_component(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
+    pub async fn remove_component(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
         self.change_rustup_thing(
             workspace,
             RustupAction::Remove,
             RustupThing::Component,
             name,
         )
+        .await
     }
 
     /// Download and install a target for the toolchain.
     ///
     /// If the toolchain is not installed in the workspace an error will be returned. This is only
     /// supported for dist toolchains.
-    pub fn add_target(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
+    pub async fn add_target(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
         self.change_rustup_thing(workspace, RustupAction::Add, RustupThing::Target, name)
+            .await
     }
 
     /// Remove a target already installed for the toolchain.
     ///
     /// If the toolchain is not installed in the workspace or the target is missing an error will
     /// be returned. This is only supported for dist toolchains.
-    pub fn remove_target(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
+    pub async fn remove_target(&self, workspace: &Workspace, name: &str) -> anyhow::Result<()> {
         self.change_rustup_thing(workspace, RustupAction::Remove, RustupThing::Target, name)
+            .await
     }
 
     /// Return a list of installed targets for this toolchain.
     ///
     /// If the toolchain is not installed an empty list is returned.
-    pub fn installed_targets(&self, workspace: &Workspace) -> anyhow::Result<Vec<String>> {
+    pub async fn installed_targets(&self, workspace: &Workspace) -> anyhow::Result<Vec<String>> {
         self.list_rustup_things(workspace, RustupThing::Target)
+            .await
     }
 
-    fn change_rustup_thing(
+    async fn change_rustup_thing(
         &self,
         workspace: &Workspace,
         action: RustupAction,
@@ -366,7 +372,7 @@ impl Toolchain {
                 &toolchain_name,
                 name,
             ])
-            .run()
+            .run().await
             .with_context(|| {
                 format!(
                     "unable to {log_action} {thing} {name} for toolchain {toolchain_name} via rustup"
@@ -375,7 +381,7 @@ impl Toolchain {
         Ok(())
     }
 
-    fn list_rustup_things(
+    async fn list_rustup_things(
         &self,
         workspace: &Workspace,
         thing: RustupThing,
@@ -396,7 +402,8 @@ impl Toolchain {
                     not_installed = true;
                 }
             })
-            .run_capture();
+            .run_capture()
+            .await;
 
         match result {
             Ok(out) => Ok(out
@@ -414,11 +421,12 @@ impl Toolchain {
     }
 
     /// Remove the toolchain from the rustwide workspace, freeing up disk space.
-    pub fn uninstall(&self, workspace: &Workspace) -> anyhow::Result<()> {
+    pub async fn uninstall(&self, workspace: &Workspace) -> anyhow::Result<()> {
         let name = self.rustup_name();
         Command::new(workspace, &RUSTUP)
             .args(&["toolchain", "uninstall", &name])
             .run()
+            .await
             .with_context(|| format!("unable to uninstall toolchain {} via rustup", name))?;
         Ok(())
     }

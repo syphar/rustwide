@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use crate::cmd::{Binary, Command, Runnable};
 use crate::tools::Tool;
 use crate::{Toolchain, Workspace};
@@ -32,6 +34,7 @@ impl Runnable for BinaryCrate {
     }
 }
 
+#[async_trait]
 impl Tool for BinaryCrate {
     fn name(&self) -> &'static str {
         self.binary
@@ -46,18 +49,18 @@ impl Tool for BinaryCrate {
         crate::native::is_executable(path)
     }
 
-    fn install(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()> {
+    async fn install(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()> {
         let mut cmd = Command::new(workspace, Toolchain::MAIN.cargo())
             .args(&["install", self.crate_name])
             .timeout(None);
         if fast_install {
             cmd = cmd.args(&["--debug"]);
         }
-        cmd.run()?;
+        cmd.run().await?;
         Ok(())
     }
 
-    fn update(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()> {
-        self.install(workspace, fast_install)
+    async fn update(&self, workspace: &Workspace, fast_install: bool) -> anyhow::Result<()> {
+        self.install(workspace, fast_install).await
     }
 }

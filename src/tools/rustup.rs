@@ -3,6 +3,7 @@ use crate::toolchain::MAIN_TOOLCHAIN_NAME;
 use crate::tools::{Tool, RUSTUP};
 use crate::workspace::Workspace;
 use anyhow::Context as _;
+use async_trait::async_trait;
 use std::env::consts::EXE_SUFFIX;
 use std::fs::{self, File};
 use std::io;
@@ -18,6 +19,7 @@ impl Runnable for Rustup {
     }
 }
 
+#[async_trait]
 impl Tool for Rustup {
     fn name(&self) -> &'static str {
         "rustup"
@@ -32,7 +34,7 @@ impl Tool for Rustup {
         crate::native::is_executable(path)
     }
 
-    fn install(&self, workspace: &Workspace, _fast_install: bool) -> anyhow::Result<()> {
+    async fn install(&self, workspace: &Workspace, _fast_install: bool) -> anyhow::Result<()> {
         fs::create_dir_all(workspace.cargo_home())?;
         fs::create_dir_all(workspace.rustup_home())?;
 
@@ -68,19 +70,22 @@ impl Tool for Rustup {
             .env("RUSTUP_HOME", workspace.rustup_home())
             .env("CARGO_HOME", workspace.cargo_home())
             .run()
+            .await
             .context("unable to install rustup")?;
 
         Ok(())
     }
 
-    fn update(&self, workspace: &Workspace, _fast_install: bool) -> anyhow::Result<()> {
+    async fn update(&self, workspace: &Workspace, _fast_install: bool) -> anyhow::Result<()> {
         Command::new(workspace, &RUSTUP)
             .args(&["self", "update"])
             .run()
+            .await
             .context("failed to update rustup")?;
         Command::new(workspace, &RUSTUP)
             .args(&["update", MAIN_TOOLCHAIN_NAME])
             .run()
+            .await
             .with_context(|| format!("failed to update main toolchain {}", MAIN_TOOLCHAIN_NAME))?;
         Ok(())
     }

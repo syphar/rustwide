@@ -1,6 +1,7 @@
 use super::CrateTrait;
 use crate::Workspace;
 use anyhow::Context as _;
+use async_trait::async_trait;
 use flate2::read::GzDecoder;
 use log::info;
 use std::fs::File;
@@ -150,8 +151,9 @@ impl RegistryCrate {
     }
 }
 
+#[async_trait]
 impl CrateTrait for RegistryCrate {
-    fn fetch(&self, workspace: &Workspace) -> anyhow::Result<()> {
+    async fn fetch(&self, workspace: &Workspace) -> anyhow::Result<()> {
         let local = self.cache_path(workspace);
         if local.exists() {
             info!("crate {} {} is already in cache", self.name, self.version);
@@ -173,7 +175,7 @@ impl CrateTrait for RegistryCrate {
         Ok(())
     }
 
-    fn purge_from_cache(&self, workspace: &Workspace) -> anyhow::Result<()> {
+    async fn purge_from_cache(&self, workspace: &Workspace) -> anyhow::Result<()> {
         let path = self.cache_path(workspace);
         if path.exists() {
             crate::utils::remove_file(&path)?;
@@ -181,7 +183,7 @@ impl CrateTrait for RegistryCrate {
         Ok(())
     }
 
-    fn copy_source_to(&self, workspace: &Workspace, dest: &Path) -> anyhow::Result<()> {
+    async fn copy_source_to(&self, workspace: &Workspace, dest: &Path) -> anyhow::Result<()> {
         let cached = self.cache_path(workspace);
         let mut file = File::open(cached)?;
         let mut tar = Archive::new(GzDecoder::new(BufReader::new(&mut file)));

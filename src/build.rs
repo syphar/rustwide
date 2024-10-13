@@ -130,9 +130,10 @@ impl<'a> BuildBuilder<'a> {
     /// })?;
     /// # Ok(())
     /// # }
-    pub fn run<R, F: FnOnce(&Build) -> anyhow::Result<R>>(self, f: F) -> anyhow::Result<R> {
+    pub async fn run<R, F: FnOnce(&Build) -> anyhow::Result<R>>(self, f: F) -> anyhow::Result<R> {
         self.build_dir
             .run(self.toolchain, self.krate, self.sandbox, self.patches, f)
+            .await
     }
 }
 
@@ -180,7 +181,7 @@ impl BuildDirectory {
         }
     }
 
-    pub(crate) fn run<R, F: FnOnce(&Build) -> anyhow::Result<R>>(
+    pub(crate) async fn run<R, F: FnOnce(&Build) -> anyhow::Result<R>>(
         &mut self,
         toolchain: &Toolchain,
         krate: &Crate,
@@ -194,7 +195,7 @@ impl BuildDirectory {
         }
 
         let mut prepare = Prepare::new(&self.workspace, toolchain, krate, &source_dir, patches);
-        prepare.prepare()?;
+        prepare.prepare().await?;
 
         std::fs::create_dir_all(self.target_dir())?;
         let res = f(&Build {

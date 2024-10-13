@@ -1,5 +1,6 @@
 use super::CrateTrait;
 use crate::Workspace;
+use async_trait::async_trait;
 use log::info;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -14,18 +15,19 @@ impl Local {
     }
 }
 
+#[async_trait]
 impl CrateTrait for Local {
-    fn fetch(&self, _workspace: &Workspace) -> anyhow::Result<()> {
+    async fn fetch(&self, _workspace: &Workspace) -> anyhow::Result<()> {
         // There is no fetch to do for a local crate.
         Ok(())
     }
 
-    fn purge_from_cache(&self, _workspace: &Workspace) -> anyhow::Result<()> {
+    async fn purge_from_cache(&self, _workspace: &Workspace) -> anyhow::Result<()> {
         // There is no cache to purge for a local crate.
         Ok(())
     }
 
-    fn copy_source_to(&self, _workspace: &Workspace, dest: &Path) -> anyhow::Result<()> {
+    async fn copy_source_to(&self, _workspace: &Workspace, dest: &Path) -> anyhow::Result<()> {
         info!(
             "copying local crate from {} to {}",
             self.path.display(),
