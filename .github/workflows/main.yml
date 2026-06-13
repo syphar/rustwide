@@ -51,6 +51,10 @@ jobs:
             cargo_flags: ""
             docker_runtime: runsc
             test_flags: "--nocapture"
+          - os: ubuntu-22.04
+            cargo_flags: ""
+            docker_runtime: kata
+            test_flags: "--nocapture"
     steps:
       - name: Checkout the source code
         uses: actions/checkout@main
@@ -75,6 +79,21 @@ jobs:
           sudo runsc install
           sudo systemctl restart docker
           docker run --rm --runtime=runsc hello-world
+
+      - name: Install Kata Containers
+        if: matrix.docker_runtime == 'kata'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl xz-utils
+
+          KATA_VERSION=3.31.0
+          curl -fsSL -o kata-static.tar.xz "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-x86_64.tar.xz"
+          sudo tar -xJf kata-static.tar.xz -C /
+          sudo ln -sf /opt/kata/bin/containerd-shim-kata-v2 /usr/bin/containerd-shim-kata-v2
+          sudo ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
+
+          kata-runtime check
+          docker run --rm --runtime=io.containerd.kata.v2 hello-world
 
       # Having swap enabled causes problems with the OOM detector, so let's
       # disable all swapfiles before running the build.

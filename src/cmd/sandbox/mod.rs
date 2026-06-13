@@ -185,6 +185,11 @@ pub enum DockerRuntime {
     ///
     /// This passes `--runtime runsc` to Docker.
     Runsc,
+
+    /// Use the Kata Containers runtime.
+    ///
+    /// This passes `--runtime io.containerd.kata.v2` to Docker.
+    Kata,
 }
 
 impl DockerRuntime {
@@ -193,6 +198,7 @@ impl DockerRuntime {
         match self {
             Self::Default => None,
             Self::Runsc => Some("runsc"),
+            Self::Kata => Some("io.containerd.kata.v2"),
         }
     }
 
@@ -203,7 +209,7 @@ impl DockerRuntime {
     fn supports_cgroup_files_inside_container(&self) -> bool {
         match self {
             DockerRuntime::Default => true,
-            DockerRuntime::Runsc => false,
+            DockerRuntime::Runsc | DockerRuntime::Kata => false,
         }
     }
 
@@ -212,7 +218,7 @@ impl DockerRuntime {
     pub fn exposes_self_status_inside_container(&self) -> bool {
         match self {
             DockerRuntime::Default => true,
-            DockerRuntime::Runsc => false,
+            DockerRuntime::Runsc | DockerRuntime::Kata => false,
         }
     }
 }
@@ -222,6 +228,7 @@ impl fmt::Display for DockerRuntime {
         match self {
             Self::Default => "default".fmt(f),
             Self::Runsc => "runsc".fmt(f),
+            Self::Kata => "kata".fmt(f),
         }
     }
 }
@@ -231,12 +238,14 @@ impl str::FromStr for DockerRuntime {
 
     /// Parse a Docker runtime name.
     ///
-    /// Accepts `""` and `"default"` for [`DockerRuntime::Default`], and
-    /// `"runsc"` for [`DockerRuntime::Runsc`].
+    /// Accepts `""` and `"default"` for [`DockerRuntime::Default`],
+    /// `"runsc"` for [`DockerRuntime::Runsc`], and `"kata"` for
+    /// [`DockerRuntime::Kata`].
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "" | "default" => Ok(Self::Default),
             "runsc" => Ok(Self::Runsc),
+            "kata" => Ok(Self::Kata),
             _ => Err(ParseDockerRuntimeError),
         }
     }
@@ -444,9 +453,11 @@ impl SandboxBuilder {
 
     /// Use a specific Docker runtime for the sandbox container.
     ///
-    /// [`DockerRuntime::Runsc`] maps to Docker's `--runtime runsc` flag. By
-    /// default, [`DockerRuntime::Default`] is used and no runtime is passed, so
-    /// Docker uses the daemon's configured default runtime.
+    /// [`DockerRuntime::Runsc`] maps to Docker's `--runtime runsc` flag, and
+    /// [`DockerRuntime::Kata`] maps to Docker's
+    /// `--runtime io.containerd.kata.v2` flag. By default,
+    /// [`DockerRuntime::Default`] is used and no runtime is passed, so Docker
+    /// uses the daemon's configured default runtime.
     pub fn docker_runtime(mut self, runtime: DockerRuntime) -> Self {
         self.docker_runtime = runtime;
         self
@@ -986,6 +997,7 @@ mod tests {
     #[test_case("", Ok(DockerRuntime::Default))]
     #[test_case("default", Ok(DockerRuntime::Default))]
     #[test_case("runsc", Ok(DockerRuntime::Runsc))]
+    #[test_case("kata", Ok(DockerRuntime::Kata))]
     #[test_case("runc", Err(ParseDockerRuntimeError))]
     fn parses_docker_runtime_values(
         value: &str,
@@ -996,6 +1008,7 @@ mod tests {
 
     #[test_case(DockerRuntime::Default, None)]
     #[test_case(DockerRuntime::Runsc, Some("runsc"))]
+    #[test_case(DockerRuntime::Kata, Some("io.containerd.kata.v2"))]
     fn renders_docker_runtime_names(runtime: DockerRuntime, expected: Option<&str>) {
         assert_eq!(runtime.docker_name(), expected);
     }
