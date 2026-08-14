@@ -167,6 +167,68 @@ pub struct SandboxBuilder {
     enable_networking: bool,
     /// Docker runtime selected for this sandbox.
     docker_runtime: DockerRuntime,
+    isolation: Isolation,
+}
+
+/// Controls Docker's `--isolation` option during container creation.
+///
+/// The choice of isolation level dictates the security boundaries and
+/// resource overhead, particularly when running native Windows containers.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Isolation {
+    /// Omits the `--isolation` flag and lets the Docker daemon use its
+    /// configured default isolation level.
+    ///
+    /// * **Linux:** Defaults to native kernel isolation (namespaces and cgroups).
+    /// * **Windows Server:** Defaults to `process` isolation.
+    /// * **Windows 10/11 (Client):** Defaults to `hyperv` isolation.
+    #[cfg_attr(not(windows), default)]
+    Default,
+
+    /// Make Docker use Hyper-V isolation (`--isolation hyperv`).
+    ///
+    /// **Windows Containers Only:** Runs each container inside a highly optimized,
+    /// lightweight virtual machine. This provides a completely dedicated kernel
+    /// and stronger security boundaries (ideal for untrusted code), but incurs
+    /// higher resource overhead.
+    Hyperv,
+
+    /// Make Docker use Process isolation (`--isolation process`).
+    ///
+    /// **Windows Containers Only:** Containers run as isolated processes directly
+    /// on the host system, sharing the host's Windows kernel. This provides
+    /// maximum performance and low overhead, but offers weaker security boundaries.
+    #[cfg_attr(windows, default)]
+    Process,
+}
+
+impl Isolation {
+    fn isolation_name(self) -> Option<&'static str> {
+        match self {
+            Isolation::Hyperv => Some("hyperv"),
+            Isolation::Process => Some("process"),
+            Isolation::Default => None,
+        }
+    }
+
+    /// Check if the selected isolation mode is supported by the current host platform.
+    ///
+    /// By default all platforms support the default isolation mode, while other
+    /// modes like Hyper-V and Process isolation are bound to Windows platforms.
+    pub fn is_supported(self) -> bool {
+        match self {
+            Isolation::Hyperv => cfg!(windows),
+            Isolation::Process => cfg!(windows),
+            Isolation::Default => true,
+        }
+    }
+}
+
+impl fmt::Display for Isolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.isolation_name().unwrap_or_default().fmt(f)
+    }
 }
 
 /// The Docker runtime used for sandbox containers.
@@ -400,6 +462,7 @@ impl SandboxBuilder {
             cpuset_cpus: None,
             enable_networking: true,
             docker_runtime: DockerRuntime::default(),
+            isolation: Isolation::default(),
         }
     }
 
@@ -438,6 +501,16 @@ impl SandboxBuilder {
     /// By default no memory limit is present, and its size is provided in bytes.
     pub fn memory_limit(mut self, limit: Option<usize>) -> Self {
         self.memory_limit = limit;
+        self
+    }
+
+    /// Set the container's isolation level. This controls how strictly the container
+    /// processes are separated from the host system.
+    ///
+    /// By default the daemon's configured default isolation is used. Advanced levels
+    /// like Hyper-V or Process isolation are only supported for Windows containers.
+    pub fn isolation(mut self, isolation: Isolation) -> Self {
+        self.isolation = isolation;
         self
     }
 
@@ -588,8 +661,11 @@ impl SandboxBuilder {
             args.push("none".into());
         }
 
-        if cfg!(windows) {
-            args.push("--isolation=process".into());
+        if let Some(name) = self.isolation.isolation_name()
+            && self.isolation.is_supported()
+        {
+            args.push("--isolation".into());
+            args.push(name.into());
         }
 
         if let Some(runtime) = self.docker_runtime.docker_name() {
