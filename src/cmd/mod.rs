@@ -601,19 +601,8 @@ async fn log_command(
     no_output_timeout: Option<Duration>,
     log_output: bool,
 ) -> Result<InnerProcessOutput, CommandError> {
-    let timeout = if let Some(t) = timeout {
-        t
-    } else {
-        // If timeouts are disabled just use a *really* long timeout
-        // FIXME: this hack is horrible
-        Duration::from_secs(7 * 24 * 60 * 60)
-    };
-    let no_output_timeout = if let Some(t) = no_output_timeout {
-        t
-    } else {
-        // If the no output timeout is disabled set it the same as the full timeout.
-        timeout
-    };
+    let timeout = timeout.unwrap_or_else(|| Duration::from_secs(u32::MAX as u64));
+    let no_output_timeout = no_output_timeout.unwrap_or(timeout);
 
     let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let child_id = child.id().unwrap();
