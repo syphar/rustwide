@@ -9,6 +9,7 @@ use crate::{
 use docker::CgroupStatsReader;
 use log::{error, info};
 use serde::Deserialize;
+use std::ops::{Add, AddAssign};
 use std::{
     cell::RefCell,
     env,
@@ -294,6 +295,19 @@ impl SandboxStatistics {
     /// Merge another `SandboxStatistics` into `self` in place.
     pub fn merge(&mut self, other: Self) {
         *self = mem::take(self).combine(other);
+    }
+}
+
+impl Add for SandboxStatistics {
+    type Output = SandboxStatistics;
+    fn add(self, other: Self) -> Self::Output {
+        self.combine(other)
+    }
+}
+
+impl AddAssign for SandboxStatistics {
+    fn add_assign(&mut self, rhs: Self) {
+        self.merge(rhs);
     }
 }
 
