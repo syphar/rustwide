@@ -285,10 +285,9 @@ impl SandboxStatistics {
     /// Combine two `SandboxStatistics` into one, keeping the highest observed peak memory.
     pub fn combine(self, other: Self) -> Self {
         Self {
-            memory_peak: match (self.memory_peak, other.memory_peak) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (a, b) => a.or(b),
-            },
+            // Option<u64> actually implements Ord, which is required for max. None will always be
+            // less than a Some value
+            memory_peak: self.memory_peak.max(other.memory_peak),
         }
     }
 
