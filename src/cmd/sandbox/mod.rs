@@ -192,6 +192,7 @@ pub enum Isolation {
     /// lightweight virtual machine. This provides a completely dedicated kernel
     /// and stronger security boundaries (ideal for untrusted code), but incurs
     /// higher resource overhead.
+    #[cfg(windows)]
     Hyperv,
 
     /// Make Docker use Process isolation (`--isolation process`).
@@ -199,6 +200,7 @@ pub enum Isolation {
     /// **Windows Containers Only:** Containers run as isolated processes directly
     /// on the host system, sharing the host's Windows kernel. This provides
     /// maximum performance and low overhead, but offers weaker security boundaries.
+    #[cfg(windows)]
     Process,
 }
 
@@ -208,18 +210,6 @@ impl Isolation {
             Isolation::Hyperv => Some("hyperv"),
             Isolation::Process => Some("process"),
             Isolation::Default => None,
-        }
-    }
-
-    /// Check if the selected isolation mode is supported by the current host platform.
-    ///
-    /// By default all platforms support the default isolation mode, while other
-    /// modes like Hyper-V and Process isolation are bound to Windows platforms.
-    pub fn is_supported(self) -> bool {
-        match self {
-            Isolation::Hyperv => cfg!(windows),
-            Isolation::Process => cfg!(windows),
-            Isolation::Default => true,
         }
     }
 }
@@ -660,9 +650,7 @@ impl SandboxBuilder {
             args.push("none".into());
         }
 
-        if let Some(name) = self.isolation.isolation_name()
-            && self.isolation.is_supported()
-        {
+        if let Some(name) = self.isolation.isolation_name() {
             args.push("--isolation".into());
             args.push(name.into());
         }
