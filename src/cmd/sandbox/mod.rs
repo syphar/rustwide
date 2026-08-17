@@ -205,7 +205,7 @@ pub enum Isolation {
 }
 
 impl Isolation {
-    fn isolation_name(self) -> Option<&'static str> {
+    fn isolation_arg(self) -> Option<&'static str> {
         match self {
             Isolation::Hyperv => Some("hyperv"),
             Isolation::Process => Some("process"),
@@ -216,7 +216,7 @@ impl Isolation {
 
 impl fmt::Display for Isolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.isolation_name().unwrap_or_default().fmt(f)
+        self.isolation_arg().unwrap_or_default().fmt(f)
     }
 }
 
@@ -650,7 +650,7 @@ impl SandboxBuilder {
             args.push("none".into());
         }
 
-        if let Some(name) = self.isolation.isolation_name() {
+        if let Some(name) = self.isolation.isolation_arg() {
             args.push("--isolation".into());
             args.push(name.into());
         }
