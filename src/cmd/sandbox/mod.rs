@@ -1107,6 +1107,13 @@ mod tests {
         assert_eq!(runtime.docker_name(), expected);
     }
 
+    #[test_case(Isolation::Default, None)]
+    #[cfg_attr(windows, test_case(Isolation::Process, Some("process")))]
+    #[cfg_attr(windows, test_case(Isolation::Hyperv, Some("hyperv")))]
+    fn renders_isolation_args(runtime: Isolation, expected: Option<&str>) {
+        assert_eq!(runtime.isolation_arg(), expected);
+    }
+
     const fn stats(peak: Option<u64>) -> SandboxStatistics {
         SandboxStatistics { memory_peak: peak }
     }

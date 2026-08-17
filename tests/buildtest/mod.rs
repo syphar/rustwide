@@ -1,5 +1,6 @@
 use log::LevelFilter;
-use rustwide::cmd::ProcessLinesActions;
+use rustwide::cmd::{Isolation, ProcessLinesActions};
+use test_case::test_case;
 
 mod container_cleanup;
 #[macro_use]
@@ -70,6 +71,28 @@ fn test_hello_world() {
             );
             Ok(())
         })?;
+        Ok(())
+    });
+}
+
+#[test_case(Isolation::Default; "default")]
+#[cfg_attr(windows, test_case(Isolation::Hyperv; "hyperv"))]
+#[cfg_attr(windows, test_case(Isolation::Process; "process"))]
+#[test]
+fn test_isolation(isolation: Isolation) {
+    runner::run("hello-world", |run| {
+        run.run(
+            crate::utils::sandbox_builder().isolation(isolation),
+            |build| {
+                let storage = rustwide::logging::LogStorage::new(LevelFilter::Info);
+                rustwide::logging::capture(&storage, || -> anyhow::Result<_> {
+                    build.cargo().args(["run"]).run()?;
+                    Ok(())
+                })?;
+
+                Ok(())
+            },
+        )?;
         Ok(())
     });
 }
