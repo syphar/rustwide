@@ -191,6 +191,13 @@ pub enum DockerRuntime {
     /// with the default runtime.
     /// See https://gvisor.dev/docs/user_guide/compatibility/linux/amd64/
     Runsc,
+
+    /// Use dockers sysbox runtime, aka "Enhanced Container Isoliation".
+    ///
+    /// See
+    /// * https://github.com/nestybox/sysbox
+    /// * https://docs.docker.com/enterprise/security/hardened-desktop/enhanced-container-isolation/
+    SysboxRunc,
 }
 
 impl DockerRuntime {
@@ -199,6 +206,7 @@ impl DockerRuntime {
         match self {
             Self::Default => None,
             Self::Runsc => Some("runsc"),
+            Self::SysboxRunc => Some("sysbox-runc"),
         }
     }
 
@@ -210,6 +218,7 @@ impl DockerRuntime {
         match self {
             DockerRuntime::Default => true,
             DockerRuntime::Runsc => false,
+            DockerRuntime::SysboxRunc => true,
         }
     }
 
@@ -219,6 +228,7 @@ impl DockerRuntime {
         match self {
             DockerRuntime::Default => true,
             DockerRuntime::Runsc => false,
+            DockerRuntime::SysboxRunc => true,
         }
     }
 
@@ -245,6 +255,7 @@ impl fmt::Display for DockerRuntime {
         match self {
             Self::Default => "default".fmt(f),
             Self::Runsc => "runsc".fmt(f),
+            Self::SysboxRunc => "sysbox-runc".fmt(f),
         }
     }
 }
@@ -260,6 +271,7 @@ impl str::FromStr for DockerRuntime {
         match value {
             "" | "default" => Ok(Self::Default),
             "runsc" => Ok(Self::Runsc),
+            "sysbox-runc" => Ok(Self::SysboxRunc),
             _ => Err(ParseDockerRuntimeError(value.to_string())),
         }
     }
