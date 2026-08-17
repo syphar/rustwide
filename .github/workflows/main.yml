@@ -47,10 +47,12 @@ jobs:
           # long to pull the Docker image
           - os: windows-latest
             test_flags: --skip buildtest --skip integration --skip run_binary_with_same_name_as_file
-          # run gvisor simple tests on old ubuntu for docs.rs server
           - os: ubuntu-22.04
             cargo_flags: ""
             docker_runtime: runsc
+          - os: ubuntu-22.04
+            cargo_flags: ""
+            docker_runtime: sysbox-runc
     steps:
       - name: Checkout the source code
         uses: actions/checkout@main
@@ -62,6 +64,15 @@ jobs:
 
       - name: Build rustwide
         run: cargo build --all ${{ matrix.cargo_flags }}
+
+      - name: Install sysbox
+        if: matrix.docker_runtime == 'sysbox-runc'
+        run: |
+          sudo apt-get update
+          curl -fLO https://github.com/nestybox/sysbox/releases/download/v0.7.1/sysbox-ce_0.7.1.linux_amd64.deb
+          sudo apt-get install -y ./sysbox-ce_0.7.1.linux_amd64.deb
+          sudo systemctl restart docker
+          docker run --rm --runtime=sysbox-runc hello-world
 
       - name: Install gVisor
         if: matrix.docker_runtime == 'runsc'
