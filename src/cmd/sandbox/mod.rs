@@ -207,7 +207,9 @@ pub enum Isolation {
 impl Isolation {
     fn isolation_arg(self) -> Option<&'static str> {
         match self {
+            #[cfg(windows)]
             Isolation::Hyperv => Some("hyperv"),
+            #[cfg(windows)]
             Isolation::Process => Some("process"),
             Isolation::Default => None,
         }
