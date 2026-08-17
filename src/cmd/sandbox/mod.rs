@@ -183,7 +183,7 @@ pub enum Isolation {
     /// * **Linux:** Defaults to native kernel isolation (namespaces and cgroups).
     /// * **Windows Server:** Defaults to `process` isolation.
     /// * **Windows 10/11 (Client):** Defaults to `hyperv` isolation.
-    #[cfg_attr(not(windows), default)]
+    #[default]
     Default,
 
     /// Make Docker use Hyper-V isolation (`--isolation hyperv`).
@@ -199,7 +199,6 @@ pub enum Isolation {
     /// **Windows Containers Only:** Containers run as isolated processes directly
     /// on the host system, sharing the host's Windows kernel. This provides
     /// maximum performance and low overhead, but offers weaker security boundaries.
-    #[cfg_attr(windows, default)]
     Process,
 }
 
