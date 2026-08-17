@@ -1110,8 +1110,8 @@ mod tests {
     #[test_case(Isolation::Default, None)]
     #[cfg_attr(windows, test_case(Isolation::Process, Some("process")))]
     #[cfg_attr(windows, test_case(Isolation::Hyperv, Some("hyperv")))]
-    fn renders_isolation_args(runtime: Isolation, expected: Option<&str>) {
-        assert_eq!(runtime.isolation_arg(), expected);
+    fn renders_isolation_args(isolation: Isolation, expected: Option<&str>) {
+        assert_eq!(isolation.isolation_arg(), expected);
     }
 
     const fn stats(peak: Option<u64>) -> SandboxStatistics {
