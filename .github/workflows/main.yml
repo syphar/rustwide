@@ -53,12 +53,6 @@ jobs:
           - os: ubuntu-22.04
             cargo_flags: ""
             docker_runtime: sysbox-runc
-          - os: ubuntu-18.04
-            cargo_flags: ""
-            docker_runtime: runsc
-          - os: ubuntu-18.04
-            cargo_flags: ""
-            docker_runtime: sysbox-runc
     steps:
       - name: Checkout the source code
         uses: actions/checkout@main
