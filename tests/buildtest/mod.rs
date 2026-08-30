@@ -78,7 +78,6 @@ fn test_hello_world() {
 #[test_case(Isolation::Default; "default")]
 #[cfg_attr(windows, test_case(Isolation::Hyperv; "hyperv"))]
 #[cfg_attr(windows, test_case(Isolation::Process; "process"))]
-#[test]
 fn test_isolation(isolation: Isolation) {
     runner::run("hello-world", |run| {
         run.run(
