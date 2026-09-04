@@ -36,6 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(not(feature = "tracing"))]
 fn setup_logs() {
     let mut env = env_logger::Builder::new();
     env.filter_module("rustwide", log::LevelFilter::Info);
@@ -44,3 +45,6 @@ fn setup_logs() {
     }
     rustwide::logging::init_with(env.build());
 }
+
+#[cfg(feature = "tracing")]
+fn setup_logs() {}

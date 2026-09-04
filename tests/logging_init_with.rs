@@ -1,3 +1,5 @@
+#![cfg(not(feature = "tracing"))]
+
 use log::{LevelFilter, Log, Metadata, Record, info};
 use rustwide::logging::{self, LogStorage};
 use std::sync::{

@@ -1,3 +1,5 @@
+#![cfg(not(feature = "tracing"))]
+
 use log::{LevelFilter, info};
 use rustwide::logging::{self, LogStorage};
 

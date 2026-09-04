@@ -3,8 +3,11 @@ use crate::Workspace;
 use crate::cmd::{Command, ProcessLinesActions};
 use crate::prepare::PrepareError;
 use anyhow::Context as _;
+#[cfg(not(feature = "tracing"))]
 use log::{info, warn};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "tracing")]
+use tracing::{info, warn};
 
 pub(super) struct GitRepo {
     url: String,

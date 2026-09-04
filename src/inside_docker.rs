@@ -1,7 +1,10 @@
 use crate::cmd::Command;
 use crate::workspace::Workspace;
 use base64::{Engine, engine::general_purpose::STANDARD as b64};
+#[cfg(not(feature = "tracing"))]
 use log::info;
+#[cfg(feature = "tracing")]
+use tracing::info;
 
 static PROBE_FILENAME: &str = "rustwide-probe";
 

@@ -3,8 +3,11 @@ mod local;
 mod registry;
 
 use crate::Workspace;
+#[cfg(not(feature = "tracing"))]
 use log::info;
 use std::path::Path;
+#[cfg(feature = "tracing")]
+use tracing::info;
 
 #[cfg(feature = "alternate-registries")]
 pub use registry::AlternativeRegistry;

@@ -1,3 +1,5 @@
+#![cfg(not(feature = "tracing"))]
+
 #[macro_use]
 mod utils;
 

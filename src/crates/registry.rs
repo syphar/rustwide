@@ -3,11 +3,14 @@ use crate::Workspace;
 #[cfg(feature = "alternate-registries")]
 use anyhow::Context as _;
 use flate2::read::GzDecoder;
+#[cfg(not(feature = "tracing"))]
 use log::info;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read};
 use std::path::{Path, PathBuf};
 use tar::Archive;
+#[cfg(feature = "tracing")]
+use tracing::info;
 
 static CRATES_ROOT: &str = "https://static.crates.io/crates";
 

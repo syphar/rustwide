@@ -1,12 +1,15 @@
 use crate::cmd::{Command, CommandError, ProcessLinesActions};
 use crate::{Crate, Toolchain, Workspace, build::CratePatch};
 use anyhow::Context as _;
+#[cfg(not(feature = "tracing"))]
 use log::info;
 use std::path::Path;
 use toml::{
     Value,
     value::{Array, Table},
 };
+#[cfg(feature = "tracing")]
+use tracing::info;
 
 pub(crate) struct Prepare<'a> {
     workspace: &'a Workspace,

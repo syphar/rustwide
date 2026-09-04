@@ -4,11 +4,14 @@ use crate::cmd::{Command, SandboxImage};
 use crate::inside_docker::CurrentContainer;
 use anyhow::Context as _;
 use attohttpc::header;
+#[cfg(not(feature = "tracing"))]
 use log::info;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(feature = "tracing")]
+use tracing::info;
 
 #[cfg(windows)]
 static DEFAULT_SANDBOX_IMAGE: &str = "rustops/crates-build-env-windows";

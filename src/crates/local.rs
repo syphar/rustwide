@@ -1,7 +1,10 @@
 use super::CrateTrait;
 use crate::Workspace;
+#[cfg(not(feature = "tracing"))]
 use log::info;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "tracing")]
+use tracing::info;
 use walkdir::WalkDir;
 
 pub(super) struct Local {

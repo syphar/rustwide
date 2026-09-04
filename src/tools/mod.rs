@@ -4,10 +4,13 @@ mod rustup;
 use crate::workspace::Workspace;
 use anyhow::bail;
 use binary_crates::BinaryCrate;
+#[cfg(not(feature = "tracing"))]
 use log::info;
 use rustup::Rustup;
 use std::env::consts::EXE_SUFFIX;
 use std::path::PathBuf;
+#[cfg(feature = "tracing")]
+use tracing::info;
 
 pub(crate) static RUSTUP: Rustup = Rustup;
 

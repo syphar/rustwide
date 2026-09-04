@@ -6,9 +6,12 @@ use crate::tools::RUSTUP;
 #[cfg(feature = "unstable-toolchain-ci")]
 use crate::tools::RUSTUP_TOOLCHAIN_INSTALL_MASTER;
 use anyhow::{Context as _, anyhow};
+#[cfg(not(feature = "tracing"))]
 use log::info;
 use std::borrow::Cow;
 use std::path::Path;
+#[cfg(feature = "tracing")]
+use tracing::info;
 
 pub(crate) const MAIN_TOOLCHAIN_NAME: &str = "stable";
 

@@ -16,7 +16,8 @@
 //! * **unstable-toolchain-ci**: allow fetching toolchains from rustc's CI artifacts storage. Support for
 //!   them is **incomplete** (not all methods might work), and there is **no stability guarantee**
 //!   when using them!
-//! * **tracing**: emit performance spans for rustwide operations.
+//! * **tracing**: emit performance spans and events for rustwide operations. This disables the
+//!   `logging` module, which is based on the `log` crate.
 //!
 //! [crater]: https://github.com/rust-lang/crater
 //! [docsrs]: https://github.com/rust-lang/docs.rs
@@ -25,6 +26,7 @@ mod build;
 pub mod cmd;
 mod crates;
 mod inside_docker;
+#[cfg(not(feature = "tracing"))]
 pub mod logging;
 mod native;
 mod prepare;

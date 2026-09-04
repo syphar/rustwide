@@ -1,7 +1,10 @@
+#[cfg(not(feature = "tracing"))]
 use log::warn;
 use percent_encoding::{AsciiSet, CONTROLS};
 use std::fs::{OpenOptions, TryLockError};
 use std::path::{Component, Path, PathBuf, Prefix, PrefixComponent};
+#[cfg(feature = "tracing")]
+use tracing::warn;
 
 const ENCODE_SET: AsciiSet = CONTROLS
     .add(b'/')

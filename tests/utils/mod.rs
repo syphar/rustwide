@@ -1,3 +1,4 @@
+#[cfg(not(feature = "tracing"))]
 use log::LevelFilter;
 use rustwide::{
     Workspace, WorkspaceBuilder,
@@ -41,6 +42,7 @@ pub(crate) fn sandbox_builder() -> SandboxBuilder {
         .docker_runtime(DockerRuntime::from_env("RUSTWIDE_DOCKER_RUNTIME").unwrap_or_default())
 }
 
+#[cfg(not(feature = "tracing"))]
 fn init_logs() {
     let env = env_logger::Builder::new()
         .filter_module("rustwide", LevelFilter::Info)
@@ -49,6 +51,9 @@ fn init_logs() {
         .build();
     rustwide::logging::init_with(env);
 }
+
+#[cfg(feature = "tracing")]
+fn init_logs() {}
 
 #[macro_export]
 macro_rules! os_string {

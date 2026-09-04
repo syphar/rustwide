@@ -7,6 +7,7 @@ use crate::{
     cmd::{Command, CommandError, ProcessLinesActions, ProcessOutput, container_dirs},
 };
 use docker::CgroupStatsReader;
+#[cfg(not(feature = "tracing"))]
 use log::{error, info};
 use serde::Deserialize;
 use std::ops::{Add, AddAssign};
@@ -21,6 +22,8 @@ use std::{
     str,
     time::Duration,
 };
+#[cfg(feature = "tracing")]
+use tracing::{error, info};
 
 /// The Docker image used for sandboxing.
 #[derive(Debug)]

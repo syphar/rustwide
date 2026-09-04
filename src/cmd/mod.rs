@@ -12,6 +12,7 @@ use futures_util::{
     future::{self, FutureExt},
     stream::{self, TryStreamExt},
 };
+#[cfg(not(feature = "tracing"))]
 use log::{error, info};
 use process_lines_actions::InnerState;
 use std::ffi::{OsStr, OsString};
@@ -28,6 +29,8 @@ use tokio::{
     time,
 };
 use tokio_stream::{StreamExt, wrappers::LinesStream};
+#[cfg(feature = "tracing")]
+use tracing::{error, info};
 
 // TODO: Migrate to asynchronous code and remove runtime
 pub(super) static RUNTIME: LazyLock<Runtime> =
@@ -382,19 +385,17 @@ impl<'w> Command<'w, '_> {
         }
     }
 
-    /// Enable or disable logging all the output lines to the [`log` crate][log]. By default
+    /// Enable or disable logging all the output lines. By default
     /// logging is enabled.
     ///
-    /// [log]: https://crates.io/crates/log
     pub fn log_output(mut self, log_output: bool) -> Self {
         self.log_output = log_output;
         self
     }
 
-    /// Enable or disable logging the command name and args to the [`log` crate][log] before the
+    /// Enable or disable logging the command name and args before the
     /// exectuion. By default logging is enabled.
     ///
-    /// [log]: https://crates.io/crates/log
     pub fn log_command(mut self, log_command: bool) -> Self {
         self.log_command = log_command;
         self
