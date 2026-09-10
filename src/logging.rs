@@ -228,6 +228,13 @@ impl fmt::Display for LogStorage {
     }
 }
 
+/// Whether Rustwide's logging system has been initialized.
+///
+/// Call `init` or `init_with` before capturing logs.
+pub fn is_initialized() -> bool {
+    INITIALIZED.load(Ordering::SeqCst)
+}
+
 /// Capture all log messages emitted inside a closure.
 ///
 /// This function will capture all the message the provided closure emitted **in the current
@@ -254,8 +261,10 @@ impl fmt::Display for LogStorage {
 /// [`init`]: fn.init.html
 /// [`init_with`]: fn.init_with.html
 pub fn capture<R>(storage: &LogStorage, f: impl FnOnce() -> R) -> R {
-    if !INITIALIZED.load(Ordering::SeqCst) {
-        panic!("called capture without initializing rustwide::logging");
+    if !is_initialized() {
+        panic!(
+            "Rustwide logging is not initialized; call rustwide::logging::init() or init_with() before capture()"
+        );
     }
 
     let storage = Box::new(storage.clone());
