@@ -14,9 +14,10 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["alternate-registries"]
+default = ["git-registries"]
 
-alternate-registries = ["dep:git2"]
+git-registries = ["dep:git2"]
+alternate-registries = ["git-registries"]
 unstable = []
 unstable-toolchain-ci = []
 tracing = ["dep:tracing"]
@@ -35,6 +36,7 @@ flate2 = "1"
 tar = "0.4.0"
 percent-encoding = "2.1.0"
 walkdir = "2.2"
+url = "2.5"
 toml = "1.1.2"
 remove_dir_all = "1.0.0"
 base64 = "0.23.0"
@@ -54,3 +56,4 @@ env_logger = "0.11.3"
 rand = "0.10.0"
 test-case = "3.3.1"
 tiny_http = "0.12.0"
+mockito = "1"

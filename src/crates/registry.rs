@@ -1,28 +1,45 @@
 use super::CrateTrait;
 use crate::Workspace;
-#[cfg(feature = "alternate-registries")]
 use anyhow::Context as _;
 use flate2::read::GzDecoder;
 use log::info;
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Read};
+use std::fs::{self, File};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use tar::Archive;
+use url::Url;
 
-static CRATES_ROOT: &str = "https://static.crates.io/crates";
+pub(crate) static CRATES_IO_SPARSE_INDEX: LazyLock<Url> = LazyLock::new(|| {
+    Url::parse("https://index.crates.io/").expect("crates.io sparse index URL is valid")
+});
 
-/// A type for alternative registry as described in rust-lang/rfcs#2141
-#[cfg(feature = "alternate-registries")]
-pub struct AlternativeRegistry {
+pub(super) fn normalize_sparse_index(mut index: Url) -> anyhow::Result<Url> {
+    if let Some(index_url) = index.as_str().strip_prefix("sparse+") {
+        index = Url::parse(index_url).context("invalid sparse index URL")?;
+    }
+
+    if !index.path().ends_with('/') {
+        let path = format!("{}/", index.path());
+        index.set_path(&path);
+    }
+    Ok(index)
+}
+
+/// A Git-indexed registry as described in rust-lang/rfcs#2141.
+///
+/// For an HTTP sparse index, use [`Crate::sparse_registry`](super::Crate::sparse_registry).
+#[cfg(feature = "git-registries")]
+pub struct GitRegistry {
     registry_index: String,
     key: Option<String>,
 }
 
-#[cfg(feature = "alternate-registries")]
-impl AlternativeRegistry {
-    /// Registry for specified registry index
-    pub fn new(registry_index: impl Into<String>) -> AlternativeRegistry {
-        AlternativeRegistry {
+#[cfg(feature = "git-registries")]
+impl GitRegistry {
+    /// Create a Git-indexed registry for the specified registry index URL.
+    pub fn new(registry_index: impl Into<String>) -> GitRegistry {
+        GitRegistry {
             registry_index: registry_index.into(),
             key: None,
         }
@@ -43,25 +60,34 @@ impl AlternativeRegistry {
 }
 
 pub(crate) enum Registry {
-    CratesIo,
-    #[cfg(feature = "alternate-registries")]
-    Alternative(AlternativeRegistry),
+    Sparse(Url),
+    #[cfg(feature = "git-registries")]
+    Git(GitRegistry),
 }
 
 impl Registry {
     fn cache_folder(&self) -> String {
         match self {
-            Registry::CratesIo => "cratesio-sources".into(),
-            #[cfg(feature = "alternate-registries")]
-            Registry::Alternative(alt) => format!("{}-sources", alt.index_folder()),
+            Registry::Sparse(index) if index == &*CRATES_IO_SPARSE_INDEX => {
+                "cratesio-sources".into()
+            }
+            Registry::Sparse(index) => {
+                format!(
+                    "{}-sources",
+                    crate::utils::escape_path(index.as_str().as_bytes())
+                )
+            }
+            #[cfg(feature = "git-registries")]
+            Registry::Git(registry) => format!("{}-sources", registry.index_folder()),
         }
     }
 
     fn name(&self) -> String {
         match self {
-            Registry::CratesIo => "crates.io".into(),
-            #[cfg(feature = "alternate-registries")]
-            Registry::Alternative(alt) => alt.index().to_string(),
+            Registry::Sparse(index) if index == &*CRATES_IO_SPARSE_INDEX => "crates.io".into(),
+            Registry::Sparse(index) => index.as_str().into(),
+            #[cfg(feature = "git-registries")]
+            Registry::Git(registry) => registry.index().to_string(),
         }
     }
 }
@@ -72,7 +98,6 @@ pub(super) struct RegistryCrate {
     version: String,
 }
 
-#[cfg(feature = "alternate-registries")]
 #[derive(serde::Deserialize)]
 struct IndexConfig {
     dl: String,
@@ -95,24 +120,74 @@ impl RegistryCrate {
             .join(format!("{}-{}.crate", self.name, self.version))
     }
 
+    fn sparse_config(&self, workspace: &Workspace, index: &Url) -> anyhow::Result<IndexConfig> {
+        sparse_config(&workspace.cache_dir(), workspace.http_client(), index)
+    }
+}
+
+/// Generate the path where we cache `config.json` from the given sparse index.
+fn sparse_config_path(cache_dir: &Path, index: &Url) -> PathBuf {
+    cache_dir
+        .join("registry-index")
+        .join(crate::utils::escape_path(index.as_str().as_bytes()))
+        .join("config.json")
+}
+
+/// Fetch & locally cache the `/config.json` file of the given sparse index.
+fn sparse_config(
+    cache_dir: &Path,
+    http_client: &attohttpc::Session,
+    index: &Url,
+) -> anyhow::Result<IndexConfig> {
+    let path = sparse_config_path(cache_dir, index);
+    match fs::read_to_string(&path) {
+        Ok(config) => serde_json::from_str(&config).context("registry has invalid config.json"),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            let config_url = index.join("config.json")?;
+            let config = http_client
+                .get(config_url.as_str())
+                .send()?
+                .error_for_status()?
+                .text()
+                .with_context(|| {
+                    format!("unable to fetch sparse registry config at {config_url}")
+                })?;
+
+            let parsed = serde_json::from_str::<IndexConfig>(&config)
+                .context("registry has invalid config.json")?;
+
+            let parent = path.parent().expect("config path has a parent");
+            fs::create_dir_all(parent)?;
+
+            // Write config.json to a temporary path first, then atomically move it into place.
+            let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+            temporary.write_all(config.as_bytes())?;
+            temporary.persist(&path).map_err(|error| error.error)?;
+            Ok(parsed)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+impl RegistryCrate {
     #[allow(unused_variables)]
     #[cfg_attr(feature = "tracing", tracing::instrument(skip_all, level = "debug"))]
-    fn fetch_url(&self, workspace: &Workspace) -> anyhow::Result<String> {
+    fn fetch_url(&self, workspace: &Workspace) -> anyhow::Result<Url> {
         match &self.registry {
-            Registry::CratesIo => Ok(format!(
-                "{0}/{1}/{1}-{2}.crate",
-                CRATES_ROOT, self.name, self.version
-            )),
-            #[cfg(feature = "alternate-registries")]
-            Registry::Alternative(alt) => {
+            Registry::Sparse(index) => {
+                let config = self.sparse_config(workspace, index)?;
+                download_url(&config.dl, &self.name, &self.version)
+            }
+            #[cfg(feature = "git-registries")]
+            Registry::Git(registry) => {
                 let index_path = workspace
                     .cache_dir()
                     .join("registry-index")
-                    .join(alt.index_folder());
+                    .join(registry.index_folder());
                 if !index_path.exists() {
-                    let url = alt.index();
+                    let url = registry.index();
                     let mut fo = git2::FetchOptions::new();
-                    if let Some(key) = alt.key.as_deref() {
+                    if let Some(key) = registry.key.as_deref() {
                         fo.remote_callbacks({
                             let mut callbacks = git2::RemoteCallbacks::new();
                             callbacks.credentials(
@@ -136,27 +211,33 @@ impl RegistryCrate {
                     info!("cloned registry index");
                 }
                 let config = std::fs::read_to_string(index_path.join("config.json"))?;
-                let template_url = serde_json::from_str::<IndexConfig>(&config)
-                    .context("registry has invalid config.json")?
-                    .dl;
-                let replacements = [("{crate}", &self.name), ("{version}", &self.version)];
+                let config = serde_json::from_str::<IndexConfig>(&config)
+                    .context("registry has invalid config.json")?;
 
-                let url = if replacements
-                    .iter()
-                    .any(|(key, _)| template_url.contains(key))
-                {
-                    let mut url = template_url;
-                    for (key, value) in &replacements {
-                        url = url.replace(key, value);
-                    }
-                    url
-                } else {
-                    format!("{}/{}/{}/download", template_url, self.name, self.version)
-                };
-
-                Ok(url)
+                download_url(&config.dl, &self.name, &self.version)
             }
         }
+    }
+}
+
+/// Generate a download url from a `dl` URL template.
+///
+/// Replacements are incomplete for now and support only simple use-cases.
+/// See https://doc.rust-lang.org/cargo/reference/registry-index.html
+fn download_url(template: &str, name: &str, version: &str) -> anyhow::Result<Url> {
+    let replacements = [("{crate}", name), ("{version}", version)];
+    if !replacements
+        .iter()
+        .any(|(marker, _)| template.contains(marker))
+    {
+        Ok(format!("{}/{}/{}/download", template, name, version).parse()?)
+    } else {
+        Ok(replacements
+            .into_iter()
+            .fold(template.to_string(), |url, (marker, value)| {
+                url.replace(marker, value)
+            })
+            .parse()?)
     }
 }
 
@@ -263,4 +344,129 @@ fn unpack_without_first_dir<R: Read>(archive: &mut Archive<R>, path: &Path) -> a
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{download_url, normalize_sparse_index, sparse_config, sparse_config_path};
+    use crate::crates::registry::CRATES_IO_SPARSE_INDEX;
+    use mockito::Server;
+    use std::fs;
+    use url::Url;
+
+    #[test]
+    fn fetches_sparse_config_once_and_caches_it_by_normalized_index_url() {
+        let mut server = Server::new();
+        let mock = server
+            .mock("GET", "/index/config.json")
+            .with_status(200)
+            .with_body(r#"{"dl":"https://downloads.example"}"#)
+            .expect(1)
+            .create();
+        let cache = tempfile::tempdir().unwrap();
+        let index = normalize_sparse_index(Url::parse(&format!("{}/index", server.url())).unwrap())
+            .unwrap();
+        let client = attohttpc::Session::new();
+        let first = sparse_config(cache.path(), &client, &index).unwrap();
+        let second = sparse_config(cache.path(), &client, &index).unwrap();
+
+        assert_eq!(first.dl, "https://downloads.example");
+        assert_eq!(second.dl, "https://downloads.example");
+        mock.assert();
+        assert_eq!(
+            fs::read_to_string(sparse_config_path(cache.path(), &index)).unwrap(),
+            r#"{"dl":"https://downloads.example"}"#
+        );
+    }
+
+    #[test]
+    fn invalid_sparse_config_is_not_cached_and_can_be_retried() {
+        for invalid_body in ["not JSON", r#"{"api":"https://registry.example"}"#] {
+            let mut server = Server::new();
+            let cache = tempfile::tempdir().unwrap();
+            let index =
+                normalize_sparse_index(Url::parse(&format!("{}/index", server.url())).unwrap())
+                    .unwrap();
+            let client = attohttpc::Session::new();
+            let invalid = server
+                .mock("GET", "/index/config.json")
+                .with_status(200)
+                .with_body(invalid_body)
+                .expect(1)
+                .create();
+
+            assert!(sparse_config(cache.path(), &client, &index).is_err());
+            assert!(!sparse_config_path(cache.path(), &index).exists());
+            invalid.assert();
+            invalid.remove();
+
+            let valid = server
+                .mock("GET", "/index/config.json")
+                .with_status(200)
+                .with_body(r#"{"dl":"https://downloads.example"}"#)
+                .expect(1)
+                .create();
+
+            assert_eq!(
+                sparse_config(cache.path(), &client, &index).unwrap().dl,
+                "https://downloads.example"
+            );
+            assert!(sparse_config_path(cache.path(), &index).exists());
+            valid.assert();
+        }
+    }
+
+    #[test]
+    fn sparse_registry_returns_error_for_invalid_stripped_url() {
+        let error = crate::Crate::sparse_registry("sparse+https://", "foo", "1.0.0")
+            .err()
+            .expect("invalid sparse URL should return an error");
+        assert_eq!(
+            error.downcast_ref::<url::ParseError>(),
+            Some(&url::ParseError::EmptyHost)
+        );
+    }
+
+    #[test]
+    fn normalizes_sparse_index_urls_and_derives_config_url() {
+        let index =
+            normalize_sparse_index(Url::parse("sparse+https://registry.example/index").unwrap())
+                .unwrap();
+
+        assert_eq!(index.as_str(), "https://registry.example/index/");
+        assert_eq!(
+            index.join("config.json").unwrap().as_str(),
+            "https://registry.example/index/config.json"
+        );
+    }
+
+    #[test]
+    fn expands_supported_download_url_markers() {
+        let url = download_url(
+            "https://registry.example/{crate}/{version}",
+            "MyCrate",
+            "1.2.3",
+        )
+        .unwrap();
+
+        assert_eq!(url.as_str(), "https://registry.example/MyCrate/1.2.3");
+    }
+
+    #[test]
+    fn appends_default_download_path_without_supported_markers() {
+        assert_eq!(
+            download_url("https://registry.example", "crate", "2.0.0")
+                .unwrap()
+                .as_str(),
+            "https://registry.example/crate/2.0.0/download"
+        );
+    }
+
+    #[test]
+    fn crates_io_sparse_url_is_normalized() {
+        assert_eq!(
+            normalize_sparse_index(CRATES_IO_SPARSE_INDEX.clone()).unwrap(),
+            *CRATES_IO_SPARSE_INDEX
+        );
+    }
 }
