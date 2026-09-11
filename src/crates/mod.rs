@@ -2,12 +2,16 @@ mod git;
 mod local;
 mod registry;
 
-use crate::Workspace;
+use crate::{Workspace, crates::registry::CRATES_IO_SPARSE_INDEX};
+use anyhow::{Context as _, Result};
 use log::info;
 use std::path::Path;
+use url::Url;
 
-#[cfg(feature = "alternate-registries")]
-pub use registry::AlternativeRegistry;
+#[cfg(feature = "git-registries")]
+pub use registry::GitRegistry;
+#[cfg(feature = "git-registries")]
+pub use registry::GitRegistry as AlternativeRegistry;
 
 trait CrateTrait: std::fmt::Display {
     fn fetch(&self, workspace: &Workspace) -> anyhow::Result<()>;
@@ -25,23 +29,46 @@ enum CrateType {
 pub struct Crate(CrateType);
 
 impl Crate {
-    /// Load a crate from specified registry.
-    #[cfg(feature = "alternate-registries")]
-    pub fn registry(registry: AlternativeRegistry, name: &str, version: &str) -> Self {
+    /// Load a crate from a sparse registry index.
+    ///
+    /// `index` is the URL of the registry index, with or without Cargo's `sparse+` prefix.
+    /// Its `config.json` is cached in the workspace after the first fetch.
+    pub fn sparse_registry<U>(index: U, name: &str, version: &str) -> Result<Self>
+    where
+        U: TryInto<Url>,
+        <U as TryInto<Url>>::Error: std::error::Error + Send + Sync + 'static,
+    {
+        let index = index.try_into().context("invalid index url")?;
+
+        Ok(Crate(CrateType::Registry(registry::RegistryCrate::new(
+            registry::Registry::Sparse(registry::normalize_sparse_index(index)?),
+            name,
+            version,
+        ))))
+    }
+
+    /// Load a crate from a Git-indexed registry.
+    ///
+    /// For an HTTP sparse index, use [`Crate::sparse_registry`].
+    #[cfg(feature = "git-registries")]
+    pub fn git_registry(registry: GitRegistry, name: &str, version: &str) -> Self {
         Crate(CrateType::Registry(registry::RegistryCrate::new(
-            registry::Registry::Alternative(registry),
+            registry::Registry::Git(registry),
             name,
             version,
         )))
     }
 
+    /// Compatibility alias for [`Crate::git_registry`].
+    #[cfg(feature = "git-registries")]
+    pub fn registry(registry: AlternativeRegistry, name: &str, version: &str) -> Self {
+        Self::git_registry(registry, name, version)
+    }
+
     /// Load a crate from the [crates.io registry](https://crates.io).
     pub fn crates_io(name: &str, version: &str) -> Self {
-        Crate(CrateType::Registry(registry::RegistryCrate::new(
-            registry::Registry::CratesIo,
-            name,
-            version,
-        )))
+        Self::sparse_registry(CRATES_IO_SPARSE_INDEX.clone(), name, version)
+            .expect("we know crates.io index url is valid")
     }
 
     /// Load a crate from a git repository. The full URL needed to clone the repo has to be

@@ -1,4 +1,4 @@
-#[cfg(feature = "alternate-registries")]
-mod crates_alt;
 mod crates_git;
+#[cfg(feature = "git-registries")]
+mod crates_git_registry;
 mod purge_caches;

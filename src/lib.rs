@@ -10,6 +10,8 @@
 //!
 //! Rustwide provides some optional features that can be enabled with Cargo:
 //!
+//! * **git-registries**: support Git-indexed registries (enabled by default).
+//! * **alternate-registries**: compatibility alias for **git-registries**.
 //! * **unstable**: allow Rustwide to use unstable Rust and Cargo features. While this feature also
 //!   works on Rust stable it might cause Rustwide to break, and **no stability guarantee is
 //!   present when using it!**
@@ -35,9 +37,9 @@ mod workspace;
 
 pub use crate::build::{Build, BuildBuilder, BuildDirectory, BuildResult};
 pub use crate::cmd::SandboxStatistics;
-#[cfg(feature = "alternate-registries")]
-pub use crate::crates::AlternativeRegistry;
 pub use crate::crates::Crate;
+#[cfg(feature = "git-registries")]
+pub use crate::crates::{AlternativeRegistry, GitRegistry};
 pub use crate::prepare::PrepareError;
 pub use crate::toolchain::Toolchain;
 pub use crate::workspace::{Workspace, WorkspaceBuilder};
