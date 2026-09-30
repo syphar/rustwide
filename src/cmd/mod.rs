@@ -626,6 +626,33 @@ impl CargoMessages {
         self.inner.lock().unwrap().clone()
     }
 
+    /// Return compiler diagnostics, including errors, warnings, and notes.
+    pub fn diagnostics(&self) -> Vec<serde_json::Value> {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| {
+                message.get("reason").and_then(serde_json::Value::as_str)
+                    == Some("compiler-message")
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Return compiler diagnostics whose Rustc level is `error`.
+    pub fn errors(&self) -> Vec<serde_json::Value> {
+        self.diagnostics()
+            .into_iter()
+            .filter(|message| {
+                message
+                    .pointer("/message/level")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("error")
+            })
+            .collect()
+    }
+
     /// Remove and return all captured Cargo messages.
     pub fn take_messages(&self) -> Vec<serde_json::Value> {
         std::mem::take(&mut *self.inner.lock().unwrap())
@@ -902,8 +929,14 @@ mod tests {
         let messages = CargoMessages::new();
         messages
             .push(parse_cargo_message(r#"{"reason":"build-finished","success":false}"#).unwrap());
+        messages.push(
+            parse_cargo_message(r#"{"reason":"compiler-message","message":{"level":"error"}}"#)
+                .unwrap(),
+        );
 
-        assert_eq!(messages.messages().len(), 1);
+        assert_eq!(messages.messages().len(), 2);
+        assert_eq!(messages.diagnostics().len(), 1);
+        assert_eq!(messages.errors().len(), 1);
         assert_eq!(messages.take_messages()[0]["success"], false);
         assert!(messages.messages().is_empty());
     }
