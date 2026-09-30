@@ -4,7 +4,9 @@ mod docker;
 use crate::cmd::sandbox::docker::HostCgroup;
 use crate::{
     Workspace,
-    cmd::{Command, CommandError, ProcessLinesActions, ProcessOutput, container_dirs},
+    cmd::{
+        CargoMessages, Command, CommandError, ProcessLinesActions, ProcessOutput, container_dirs,
+    },
 };
 use docker::CgroupStatsReader;
 use log::{error, info};
@@ -766,6 +768,7 @@ impl Container<'_> {
         log_output: bool,
         log_command: bool,
         render_cargo_messages: bool,
+        cargo_messages: Option<CargoMessages>,
         capture: bool,
     ) -> (SandboxStatistics, Result<ProcessOutput, CommandError>) {
         // Build the `docker exec` command with env/workdir/user from the sandbox config
@@ -795,6 +798,10 @@ impl Container<'_> {
 
         if render_cargo_messages {
             cmd = cmd.render_cargo_messages();
+        }
+
+        if let Some(messages) = cargo_messages {
+            cmd = cmd.capture_cargo_messages(&messages);
         }
 
         if let Some(f) = process_lines {
@@ -967,6 +974,7 @@ impl<'w> Sandbox<'w> {
         log_output: bool,
         log_command: bool,
         render_cargo_messages: bool,
+        cargo_messages: Option<CargoMessages>,
         capture: bool,
     ) -> Result<ProcessOutput, CommandError> {
         let container_workdir = match command.workdir {
@@ -988,6 +996,7 @@ impl<'w> Sandbox<'w> {
             log_output,
             log_command,
             render_cargo_messages,
+            cargo_messages,
             capture,
         );
         self.statistics.merge(statistics);

@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, env::consts::EXE_SUFFIX, rc::Rc};
-use std::{convert::AsRef, sync::LazyLock};
+use std::{
+    convert::AsRef,
+    sync::{Arc, LazyLock, Mutex},
+};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command as AsyncCommand,
@@ -220,6 +223,7 @@ pub struct Command<'w, 'pl> {
     log_command: bool,
     log_output: bool,
     render_cargo_messages: bool,
+    cargo_messages: Option<CargoMessages>,
 }
 
 // Custom Debug keeps command output focused: environment variables are shown as keys only,
@@ -239,6 +243,7 @@ impl fmt::Debug for Command<'_, '_> {
             .field("log_command", &self.log_command)
             .field("log_output", &self.log_output)
             .field("render_cargo_messages", &self.render_cargo_messages)
+            .field("captures_cargo_messages", &self.cargo_messages.is_some())
             .finish()
     }
 }
@@ -297,6 +302,7 @@ impl<'w> Command<'w, '_> {
             log_output: true,
             log_command: true,
             render_cargo_messages: false,
+            cargo_messages: None,
         }
     }
 
@@ -414,6 +420,16 @@ impl<'w> Command<'w, '_> {
         self
     }
 
+    /// Store parsed Cargo JSON messages in `messages` as the command runs.
+    ///
+    /// This is intended for commands run with `--message-format=json`, such as those returned by
+    /// [`Build::cargo_json`](crate::Build::cargo_json). Messages are captured even when the
+    /// command fails, so callers can inspect compiler diagnostics after `run` returns an error.
+    pub fn capture_cargo_messages(mut self, messages: &CargoMessages) -> Self {
+        self.cargo_messages = Some(messages.clone());
+        self
+    }
+
     /// Run the prepared command and return an error if it fails (for example with a non-zero exit
     /// code or a timeout).
     pub fn run(self) -> Result<(), CommandError> {
@@ -475,6 +491,7 @@ impl<'w> Command<'w, '_> {
                     self.log_output,
                     self.log_command,
                     self.render_cargo_messages,
+                    self.cargo_messages,
                     capture,
                 )
         } else {
@@ -547,6 +564,7 @@ impl<'w> Command<'w, '_> {
                     self.no_output_timeout,
                     self.log_output,
                     self.render_cargo_messages,
+                    self.cargo_messages,
                 ))
                 .map_err(|e| {
                     error!("error running command: {e}");
@@ -588,6 +606,36 @@ pub struct ProcessOutput {
     stderr: Vec<String>,
 }
 
+/// Storage for parsed messages emitted by Cargo with `--message-format=json`.
+///
+/// Unlike [`crate::logging::LogStorage`], this stores structured JSON values rather than rendered
+/// log lines. It can be cloned and shared with the command while it runs.
+#[derive(Clone, Default)]
+pub struct CargoMessages {
+    inner: Arc<Mutex<Vec<serde_json::Value>>>,
+}
+
+impl CargoMessages {
+    /// Create an empty Cargo message storage.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return all captured Cargo messages.
+    pub fn messages(&self) -> Vec<serde_json::Value> {
+        self.inner.lock().unwrap().clone()
+    }
+
+    /// Remove and return all captured Cargo messages.
+    pub fn take_messages(&self) -> Vec<serde_json::Value> {
+        std::mem::take(&mut *self.inner.lock().unwrap())
+    }
+
+    fn push(&self, message: serde_json::Value) {
+        self.inner.lock().unwrap().push(message);
+    }
+}
+
 impl ProcessOutput {
     /// Return a list of the lines printed by the process on the standard output.
     pub fn stdout_lines(&self) -> &[String] {
@@ -623,6 +671,7 @@ async fn log_command(
     no_output_timeout: Option<Duration>,
     log_output: bool,
     render_cargo_messages: bool,
+    cargo_messages: Option<CargoMessages>,
 ) -> Result<InnerProcessOutput, CommandError> {
     let timeout = timeout.unwrap_or_else(|| Duration::from_secs(u32::MAX as u64));
     let no_output_timeout = no_output_timeout.unwrap_or(timeout);
@@ -660,8 +709,16 @@ async fn log_command(
                 return future::err(CommandError::Timeout(timeout.as_secs()));
             }
 
-            if render_cargo_messages {
-                render_cargo_message(&line, &mut actions);
+            let cargo_message = (render_cargo_messages || cargo_messages.is_some())
+                .then(|| parse_cargo_message(&line))
+                .flatten();
+            if let Some(message) = &cargo_message {
+                if let Some(messages) = &cargo_messages {
+                    messages.push(message.clone());
+                }
+                if render_cargo_messages {
+                    render_cargo_message(message, &mut actions);
+                }
             }
 
             if let Some(f) = &mut process_lines {
@@ -728,14 +785,17 @@ async fn log_command(
     })
 }
 
-fn render_cargo_message(line: &str, actions: &mut ProcessLinesActions) {
-    let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
-        return;
-    };
+fn parse_cargo_message(line: &str) -> Option<serde_json::Value> {
+    let message = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    message.get("reason").and_then(serde_json::Value::as_str)?;
+    Some(message)
+}
 
-    let Some(reason) = message.get("reason").and_then(serde_json::Value::as_str) else {
-        return;
-    };
+fn render_cargo_message(message: &serde_json::Value, actions: &mut ProcessLinesActions) {
+    let reason = message
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .expect("Cargo messages must have a string reason");
 
     if reason != "compiler-message" {
         actions.remove_line();
@@ -802,7 +862,10 @@ mod tests {
     fn renders_compiler_diagnostics_from_cargo_json() {
         let mut actions = ProcessLinesActions::new();
         render_cargo_message(
-            r#"{"reason":"compiler-message","message":{"rendered":"error: something went wrong\n  --> src/lib.rs:1:1\n"}}"#,
+            &parse_cargo_message(
+                r#"{"reason":"compiler-message","message":{"rendered":"error: something went wrong\n  --> src/lib.rs:1:1\n"}}"#,
+            )
+            .unwrap(),
             &mut actions,
         );
 
@@ -818,7 +881,10 @@ mod tests {
     #[test]
     fn hides_non_diagnostic_cargo_json_messages() {
         let mut actions = ProcessLinesActions::new();
-        render_cargo_message(r#"{"reason":"compiler-artifact"}"#, &mut actions);
+        render_cargo_message(
+            &parse_cargo_message(r#"{"reason":"compiler-artifact"}"#).unwrap(),
+            &mut actions,
+        );
 
         assert_eq!(actions.take_lines(), InnerState::Removed);
     }
@@ -826,9 +892,20 @@ mod tests {
     #[test]
     fn preserves_non_json_output_from_the_built_binary() {
         let mut actions = ProcessLinesActions::new();
-        render_cargo_message("Hello, world!", &mut actions);
+        assert!(parse_cargo_message("Hello, world!").is_none());
 
         assert_eq!(actions.take_lines(), InnerState::Original);
+    }
+
+    #[test]
+    fn stores_parsed_cargo_messages() {
+        let messages = CargoMessages::new();
+        messages
+            .push(parse_cargo_message(r#"{"reason":"build-finished","success":false}"#).unwrap());
+
+        assert_eq!(messages.messages().len(), 1);
+        assert_eq!(messages.take_messages()[0]["success"], false);
+        assert!(messages.messages().is_empty());
     }
 
     #[test]
