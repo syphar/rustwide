@@ -373,13 +373,41 @@ impl<'ws> Build<'ws> {
 
     /// Run a Cargo build command with JSON messages.
     ///
-    /// This adds Cargo's `--message-format=json` option. Raw JSON messages are passed to
-    /// [`Command::process_lines`], so they can be deserialized by the caller, while rendered
-    /// compiler diagnostics are logged normally and can be captured by
-    /// [`LogStorage`](crate::logging::LogStorage).
+    /// This adds Cargo's `--message-format=json` option. Compiler diagnostics are rendered for
+    /// [`Command::process_lines`] and [`LogStorage`](crate::logging::LogStorage), while raw
+    /// parsed Cargo protocol messages can be collected with
+    /// [`Command::capture_cargo_messages`].
     ///
     /// This method is for Cargo commands that support `--message-format`, such as `build`,
     /// `check`, `test`, `run`, and `rustc`. Use [`cargo`](Self::cargo) for other Cargo commands.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use rustwide::{Crate, Toolchain, WorkspaceBuilder, cmd::{CargoMessages, SandboxBuilder}};
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # let workspace = WorkspaceBuilder::new("".as_ref(), "").init()?;
+    /// # let toolchain = Toolchain::dist("");
+    /// # let krate = Crate::local("".as_ref());
+    /// # let sandbox = SandboxBuilder::new();
+    /// # let mut build_dir = workspace.build_dir("foo");
+    /// let messages = CargoMessages::new();
+    /// build_dir.build(&toolchain, &krate, sandbox).run(|build| {
+    ///     build.cargo_json()
+    ///         .capture_cargo_messages(&messages)
+    ///         .process_lines(&mut |diagnostic, _| {
+    ///             // `diagnostic` is the rendered, user-readable compiler message.
+    ///         })
+    ///         .args(["check"])
+    ///         .run()?;
+    ///     Ok(())
+    /// })?;
+    ///
+    /// let errors = messages.errors();
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn cargo_json<'pl>(&self) -> Command<'ws, 'pl> {
         self.cargo().render_cargo_messages()
     }

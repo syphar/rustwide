@@ -29,14 +29,16 @@ impl<'a> ProcessLinesActions {
 
     /// Replace last read line from output with the lines provided.
     ///
-    /// The new lines will be logged instead of the original line.
+    /// The replacement lines are logged, and are returned by
+    /// [`Command::run_capture`](super::Command::run_capture), instead of the original line.
     pub fn replace_with_lines(&mut self, new_lines: impl Iterator<Item = &'a str>) {
         self.state = InnerState::Replaced(new_lines.map(|str| str.to_string()).collect());
     }
 
     /// Remove last read line from output.
     ///
-    /// This means that the line will not be logged.
+    /// This prevents the line from being logged or returned by
+    /// [`Command::run_capture`](super::Command::run_capture).
     pub fn remove_line(&mut self) {
         self.state = InnerState::Removed;
     }

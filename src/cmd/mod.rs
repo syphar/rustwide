@@ -353,11 +353,12 @@ impl<'w> Command<'w, '_> {
         self
     }
 
-    /// Set the function that will be called each time a line is outputted to either the standard
-    /// output or the standard error. Only one function can be set at any time for a command.
-    /// When used with [`Build::cargo_json`](crate::Build::cargo_json), compiler diagnostics are
-    /// passed as their rendered text; Cargo protocol records are available through
-    /// [`CargoMessages`] instead.
+    /// Set the function that will be called each time a line is outputted to either standard
+    /// output or standard error. Only one function can be set at any time for a command.
+    ///
+    /// With [`Build::cargo_json`](crate::Build::cargo_json), the callback is called for rendered
+    /// compiler diagnostics, which can contain multiple lines. Cargo protocol records, including
+    /// artifacts and build-script output, are available through [`CargoMessages`] instead.
     ///
     /// For sandboxed commands, the callback runs while the underlying [`Sandbox`] is mutably
     /// borrowed. Spawning another sandboxed command (e.g. via [`Build::cmd`](../build/struct.Build.html#method.cmd))
@@ -414,10 +415,10 @@ impl<'w> Command<'w, '_> {
 
     /// Render Cargo JSON messages before logging them.
     ///
-    /// This is intended for commands run with Cargo's
-    /// `--message-format=json` option. Compiler diagnostics are rendered before they are passed
-    /// to [`process_lines`](Self::process_lines) and the log output. Raw parsed messages can be
-    /// collected with [`capture_cargo_messages`](Self::capture_cargo_messages).
+    /// This is intended for commands run with Cargo's `--message-format=json` option. Compiler
+    /// diagnostics are rendered before they are passed to [`process_lines`](Self::process_lines)
+    /// and the log output. Raw parsed messages can be collected with
+    /// [`capture_cargo_messages`](Self::capture_cargo_messages).
     pub(crate) fn render_cargo_messages(mut self) -> Self {
         self.render_cargo_messages = true;
         self
@@ -428,8 +429,10 @@ impl<'w> Command<'w, '_> {
     /// This is intended for commands run with `--message-format=json`, such as those returned by
     /// [`Build::cargo_json`](crate::Build::cargo_json). Messages are captured even when the
     /// command fails, so callers can inspect compiler diagnostics after `run` returns an error.
+    ///
     /// When used with [`Build::cargo_json`](crate::Build::cargo_json), this is the raw Cargo
-    /// protocol channel; [`process_lines`](Self::process_lines) receives rendered diagnostics.
+    /// protocol channel. [`process_lines`](Self::process_lines) and [`run_capture`](Self::run_capture)
+    /// receive rendered diagnostics instead.
     pub fn capture_cargo_messages(mut self, messages: &CargoMessages) -> Self {
         self.cargo_messages = Some(messages.clone());
         self
@@ -611,10 +614,11 @@ pub struct ProcessOutput {
     stderr: Vec<String>,
 }
 
-/// Storage for parsed messages emitted by Cargo with `--message-format=json`.
+/// Storage for parsed Cargo protocol messages emitted with `--message-format=json`.
 ///
 /// Unlike [`crate::logging::LogStorage`], this stores structured JSON values rather than rendered
-/// log lines. It can be cloned and shared with the command while it runs.
+/// log lines. It can be cloned and shared with the command while it runs. Attach it to a command
+/// with [`Command::capture_cargo_messages`].
 #[derive(Clone, Default)]
 pub struct CargoMessages {
     inner: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -626,12 +630,12 @@ impl CargoMessages {
         Self::default()
     }
 
-    /// Return all captured Cargo messages.
+    /// Return a snapshot of all captured Cargo protocol messages.
     pub fn messages(&self) -> Vec<serde_json::Value> {
         self.inner.lock().unwrap().clone()
     }
 
-    /// Return compiler diagnostics, including errors, warnings, and notes.
+    /// Return a snapshot of compiler diagnostics, including errors, warnings, and notes.
     pub fn diagnostics(&self) -> Vec<serde_json::Value> {
         self.inner
             .lock()
@@ -645,7 +649,7 @@ impl CargoMessages {
             .collect()
     }
 
-    /// Return compiler diagnostics whose Rustc level is `error`.
+    /// Return a snapshot of compiler diagnostics whose Rustc level is `error`.
     pub fn errors(&self) -> Vec<serde_json::Value> {
         self.diagnostics()
             .into_iter()
@@ -658,7 +662,7 @@ impl CargoMessages {
             .collect()
     }
 
-    /// Remove and return all captured Cargo messages.
+    /// Remove and return all captured Cargo protocol messages.
     pub fn take_messages(&self) -> Vec<serde_json::Value> {
         std::mem::take(&mut *self.inner.lock().unwrap())
     }
