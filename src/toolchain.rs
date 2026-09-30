@@ -520,7 +520,7 @@ impl Runnable for RustupProxy<'_> {
         Binary::ManagedByRustwide(self.name.into())
     }
 
-    fn prepare_command<'w, 'pl>(&self, cmd: Command<'w, 'pl>) -> Command<'w, 'pl> {
+    fn prepare_command<'w, 'pl, 'cm>(&self, cmd: Command<'w, 'pl, 'cm>) -> Command<'w, 'pl, 'cm> {
         cmd.args(&[format!("+{}", self.toolchain.rustup_name())])
     }
 }

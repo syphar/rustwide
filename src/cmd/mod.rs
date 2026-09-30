@@ -20,10 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, env::consts::EXE_SUFFIX, rc::Rc};
-use std::{
-    convert::AsRef,
-    sync::{Arc, LazyLock, Mutex},
-};
+use std::{convert::AsRef, sync::LazyLock};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command as AsyncCommand,
@@ -175,7 +172,7 @@ pub trait Runnable {
     ///
     /// The default implementation simply returns the provided command without changing anything in
     /// it.
-    fn prepare_command<'w, 'pl>(&self, cmd: Command<'w, 'pl>) -> Command<'w, 'pl> {
+    fn prepare_command<'w, 'pl, 'cm>(&self, cmd: Command<'w, 'pl, 'cm>) -> Command<'w, 'pl, 'cm> {
         cmd
     }
 }
@@ -197,7 +194,7 @@ impl<B: Runnable> Runnable for &B {
         Runnable::name(*self)
     }
 
-    fn prepare_command<'w, 'pl>(&self, cmd: Command<'w, 'pl>) -> Command<'w, 'pl> {
+    fn prepare_command<'w, 'pl, 'cm>(&self, cmd: Command<'w, 'pl, 'cm>) -> Command<'w, 'pl, 'cm> {
         Runnable::prepare_command(*self, cmd)
     }
 }
@@ -210,7 +207,7 @@ impl<B: Runnable> Runnable for &B {
 /// [std]: https://doc.rust-lang.org/std/process/struct.Command.html
 #[must_use = "call `.run()` to run the command"]
 #[allow(clippy::type_complexity)]
-pub struct Command<'w, 'pl> {
+pub struct Command<'w, 'pl, 'cm> {
     workspace: Option<&'w Workspace>,
     sandbox: Option<Rc<RefCell<Sandbox<'w>>>>,
     binary: Binary,
@@ -223,13 +220,13 @@ pub struct Command<'w, 'pl> {
     log_command: bool,
     log_output: bool,
     render_cargo_messages: bool,
-    cargo_messages: Option<CargoMessages>,
+    cargo_messages: Option<&'cm mut dyn FnMut(&serde_json::Value)>,
 }
 
 // Custom Debug keeps command output focused: environment variables are shown as keys only,
 // since values often contain secrets, and `sandbox`/`process_lines` are summarized as presence
 // flags.
-impl fmt::Debug for Command<'_, '_> {
+impl fmt::Debug for Command<'_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Command")
             .field("is_sandboxed", &self.sandbox.is_some())
@@ -243,12 +240,15 @@ impl fmt::Debug for Command<'_, '_> {
             .field("log_command", &self.log_command)
             .field("log_output", &self.log_output)
             .field("render_cargo_messages", &self.render_cargo_messages)
-            .field("captures_cargo_messages", &self.cargo_messages.is_some())
+            .field(
+                "has_cargo_messages_callback",
+                &self.cargo_messages.is_some(),
+            )
             .finish()
     }
 }
 
-impl<'w> Command<'w, '_> {
+impl<'w> Command<'w, '_, '_> {
     /// Create a new, unsandboxed command.
     pub fn new<R: Runnable>(workspace: &'w Workspace, binary: R) -> Self {
         binary.prepare_command(Self::new_inner(binary.name(), Some(workspace), None))
@@ -353,48 +353,6 @@ impl<'w> Command<'w, '_> {
         self
     }
 
-    /// Set the function that will be called each time a line is outputted to either standard
-    /// output or standard error. Only one function can be set at any time for a command.
-    ///
-    /// With [`Build::cargo_json`](crate::Build::cargo_json), the callback is called for rendered
-    /// compiler diagnostics, which can contain multiple lines. Cargo protocol records, including
-    /// artifacts and build-script output, are available through [`CargoMessages`] instead.
-    ///
-    /// For sandboxed commands, the callback runs while the underlying [`Sandbox`] is mutably
-    /// borrowed. Spawning another sandboxed command (e.g. via [`Build::cmd`](../build/struct.Build.html#method.cmd))
-    /// from inside the callback is not supported with the reused-container model and will return
-    /// [`CommandError::ReentrantSandbox`](enum.CommandError.html#variant.ReentrantSandbox).
-    ///
-    /// The method is useful to analyze the command's output without storing all of it in memory.
-    /// This example builds a crate and detects compiler errors (ICEs):
-    ///
-    /// ```no_run
-    /// # use rustwide::{cmd::Command, WorkspaceBuilder};
-    /// # use std::error::Error;
-    /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// # let workspace = WorkspaceBuilder::new("".as_ref(), "").init()?;
-    /// let mut ice = false;
-    /// Command::new(&workspace, "cargo")
-    ///     .args(&["build", "--all"])
-    ///     .process_lines(&mut |line, _| {
-    ///         if line.contains("internal compiler error") {
-    ///             ice = true;
-    ///         }
-    ///     })
-    ///     .run()?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn process_lines<'pl>(
-        self,
-        f: &'pl mut dyn FnMut(&str, &mut ProcessLinesActions),
-    ) -> Command<'w, 'pl> {
-        Command {
-            process_lines: Some(f),
-            ..self
-        }
-    }
-
     /// Enable or disable logging all the output lines to the [`log` crate][log]. By default
     /// logging is enabled.
     ///
@@ -421,20 +379,6 @@ impl<'w> Command<'w, '_> {
     /// [`capture_cargo_messages`](Self::capture_cargo_messages).
     pub(crate) fn render_cargo_messages(mut self) -> Self {
         self.render_cargo_messages = true;
-        self
-    }
-
-    /// Store parsed Cargo JSON messages in `messages` as the command runs.
-    ///
-    /// This is intended for commands run with `--message-format=json`, such as those returned by
-    /// [`Build::cargo_json`](crate::Build::cargo_json). Messages are captured even when the
-    /// command fails, so callers can inspect compiler diagnostics after `run` returns an error.
-    ///
-    /// When used with [`Build::cargo_json`](crate::Build::cargo_json), this is the raw Cargo
-    /// protocol channel. [`process_lines`](Self::process_lines) and [`run_capture`](Self::run_capture)
-    /// receive rendered diagnostics instead.
-    pub fn capture_cargo_messages(mut self, messages: &CargoMessages) -> Self {
-        self.cargo_messages = Some(messages.clone());
         self
     }
 
@@ -591,6 +535,65 @@ impl<'w> Command<'w, '_> {
     }
 }
 
+impl<'w, 'pl, 'cm> Command<'w, 'pl, 'cm> {
+    /// Set the function that will be called each time a line is outputted to either standard
+    /// output or standard error. Only one function can be set at any time for a command.
+    ///
+    /// With [`Build::cargo_json`](crate::Build::cargo_json), the callback is called for rendered
+    /// compiler diagnostics, which can contain multiple lines. Cargo protocol records, including
+    /// artifacts and build-script output, are available through
+    /// [`capture_cargo_messages`](Self::capture_cargo_messages) instead.
+    ///
+    /// This example builds a crate and detects compiler errors (ICEs):
+    ///
+    /// ```no_run
+    /// # use rustwide::{cmd::Command, WorkspaceBuilder};
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # let workspace = WorkspaceBuilder::new("".as_ref(), "").init()?;
+    /// let mut ice = false;
+    /// Command::new(&workspace, "cargo")
+    ///     .args(["build", "--all"])
+    ///     .process_lines(&mut |line, _| {
+    ///         if line.contains("internal compiler error") {
+    ///             ice = true;
+    ///         }
+    ///     })
+    ///     .run()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn process_lines<'new>(
+        self,
+        f: &'new mut dyn FnMut(&str, &mut ProcessLinesActions),
+    ) -> Command<'w, 'new, 'cm> {
+        Command {
+            process_lines: Some(f),
+            ..self
+        }
+    }
+
+    /// Process parsed Cargo JSON messages as the command runs.
+    ///
+    /// This is intended for commands run with `--message-format=json`, such as those returned by
+    /// [`Build::cargo_json`](crate::Build::cargo_json). The callback runs even when the command
+    /// fails, so callers can retain compiler diagnostics after `run` returns an error.
+    ///
+    /// The callback receives the raw parsed Cargo protocol message. Registering a callback also
+    /// enables rendering: [`process_lines`](Self::process_lines) and
+    /// [`run_capture`](Self::run_capture) receive rendered diagnostics instead.
+    pub fn capture_cargo_messages<'new>(
+        self,
+        f: &'new mut dyn FnMut(&serde_json::Value),
+    ) -> Command<'w, 'pl, 'new> {
+        Command {
+            cargo_messages: Some(f),
+            render_cargo_messages: true,
+            ..self
+        }
+    }
+}
+
 struct InnerProcessOutput {
     status: ExitStatus,
     stdout: Vec<String>,
@@ -612,64 +615,6 @@ impl From<InnerProcessOutput> for ProcessOutput {
 pub struct ProcessOutput {
     stdout: Vec<String>,
     stderr: Vec<String>,
-}
-
-/// Storage for parsed Cargo protocol messages emitted with `--message-format=json`.
-///
-/// Unlike [`crate::logging::LogStorage`], this stores structured JSON values rather than rendered
-/// log lines. It can be cloned and shared with the command while it runs. Attach it to a command
-/// with [`Command::capture_cargo_messages`].
-#[derive(Clone, Default)]
-pub struct CargoMessages {
-    inner: Arc<Mutex<Vec<serde_json::Value>>>,
-}
-
-impl CargoMessages {
-    /// Create an empty Cargo message storage.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Return a snapshot of all captured Cargo protocol messages.
-    pub fn messages(&self) -> Vec<serde_json::Value> {
-        self.inner.lock().unwrap().clone()
-    }
-
-    /// Return a snapshot of compiler diagnostics, including errors, warnings, and notes.
-    pub fn diagnostics(&self) -> Vec<serde_json::Value> {
-        self.inner
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|message| {
-                message.get("reason").and_then(serde_json::Value::as_str)
-                    == Some("compiler-message")
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Return a snapshot of compiler diagnostics whose Rustc level is `error`.
-    pub fn errors(&self) -> Vec<serde_json::Value> {
-        self.diagnostics()
-            .into_iter()
-            .filter(|message| {
-                message
-                    .pointer("/message/level")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("error")
-            })
-            .collect()
-    }
-
-    /// Remove and return all captured Cargo protocol messages.
-    pub fn take_messages(&self) -> Vec<serde_json::Value> {
-        std::mem::take(&mut *self.inner.lock().unwrap())
-    }
-
-    fn push(&self, message: serde_json::Value) {
-        self.inner.lock().unwrap().push(message);
-    }
 }
 
 impl ProcessOutput {
@@ -707,7 +652,7 @@ async fn log_command(
     no_output_timeout: Option<Duration>,
     log_output: bool,
     render_cargo_messages: bool,
-    cargo_messages: Option<CargoMessages>,
+    mut cargo_messages: Option<&mut dyn FnMut(&serde_json::Value)>,
 ) -> Result<InnerProcessOutput, CommandError> {
     let timeout = timeout.unwrap_or_else(|| Duration::from_secs(u32::MAX as u64));
     let no_output_timeout = no_output_timeout.unwrap_or(timeout);
@@ -749,8 +694,8 @@ async fn log_command(
                 .then(|| parse_cargo_message(&line))
                 .flatten();
             let callback_line = if let Some(message) = &cargo_message {
-                if let Some(messages) = &cargo_messages {
-                    messages.push(message.clone());
+                if let Some(f) = &mut cargo_messages {
+                    f(message);
                 }
                 if render_cargo_messages {
                     render_cargo_message(message, &mut actions)
@@ -953,20 +898,37 @@ mod tests {
     }
 
     #[test]
-    fn stores_parsed_cargo_messages() {
-        let messages = CargoMessages::new();
-        messages
-            .push(parse_cargo_message(r#"{"reason":"build-finished","success":false}"#).unwrap());
-        messages.push(
-            parse_cargo_message(r#"{"reason":"compiler-message","message":{"level":"error"}}"#)
-                .unwrap(),
-        );
+    fn parses_cargo_messages_with_a_reason() {
+        assert!(parse_cargo_message(r#"{"reason":"build-finished","success":false}"#).is_some());
+        assert!(parse_cargo_message(r#"{"message":"not a Cargo protocol message"}"#).is_none());
+    }
 
-        assert_eq!(messages.messages().len(), 2);
-        assert_eq!(messages.diagnostics().len(), 1);
-        assert_eq!(messages.errors().len(), 1);
-        assert_eq!(messages.take_messages()[0]["success"], false);
-        assert!(messages.messages().is_empty());
+    #[cfg(unix)]
+    #[test]
+    fn sends_raw_cargo_messages_to_the_callback_and_renders_the_output() {
+        let mut command = AsyncCommand::new("sh");
+        command.args([
+            "-c",
+            r#"printf '%s\n' '{"reason":"compiler-message","message":{"rendered":"error: example\n"}}'"#,
+        ]);
+        let mut messages = Vec::new();
+
+        let output = RUNTIME
+            .block_on(log_command(
+                command,
+                None,
+                true,
+                None,
+                None,
+                false,
+                true,
+                Some(&mut |message| messages.push(message.clone())),
+            ))
+            .unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["reason"], "compiler-message");
+        assert_eq!(output.stdout, ["error: example"]);
     }
 
     #[test]

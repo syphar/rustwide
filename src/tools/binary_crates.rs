@@ -24,7 +24,10 @@ impl Runnable for BinaryCrate {
         })
     }
 
-    fn prepare_command<'w, 'pl>(&self, mut cmd: Command<'w, 'pl>) -> Command<'w, 'pl> {
+    fn prepare_command<'w, 'pl, 'cm>(
+        &self,
+        mut cmd: Command<'w, 'pl, 'cm>,
+    ) -> Command<'w, 'pl, 'cm> {
         if let Some(subcommand) = self.cargo_subcommand {
             cmd = cmd.args([subcommand]);
         }

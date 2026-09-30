@@ -337,7 +337,7 @@ impl<'ws> Build<'ws> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn cmd<'pl, R: Runnable>(&self, bin: R) -> Command<'ws, 'pl> {
+    pub fn cmd<'pl, 'cm, R: Runnable>(&self, bin: R) -> Command<'ws, 'pl, 'cm> {
         let container_dir = &*container_dirs::TARGET_DIR;
 
         Command::new_in_sandbox(&self.dir.workspace, self.sandbox.clone(), bin)
@@ -367,7 +367,7 @@ impl<'ws> Build<'ws> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn cargo<'pl>(&self) -> Command<'ws, 'pl> {
+    pub fn cargo<'pl, 'cm>(&self) -> Command<'ws, 'pl, 'cm> {
         self.cmd(self.toolchain.cargo())
     }
 
@@ -384,7 +384,7 @@ impl<'ws> Build<'ws> {
     /// # Example
     ///
     /// ```no_run
-    /// # use rustwide::{Crate, Toolchain, WorkspaceBuilder, cmd::{CargoMessages, SandboxBuilder}};
+    /// # use rustwide::{Crate, Toolchain, WorkspaceBuilder, cmd::SandboxBuilder};
     /// # use std::error::Error;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// # let workspace = WorkspaceBuilder::new("".as_ref(), "").init()?;
@@ -392,10 +392,14 @@ impl<'ws> Build<'ws> {
     /// # let krate = Crate::local("".as_ref());
     /// # let sandbox = SandboxBuilder::new();
     /// # let mut build_dir = workspace.build_dir("foo");
-    /// let messages = CargoMessages::new();
+    /// let mut errors = Vec::new();
     /// build_dir.build(&toolchain, &krate, sandbox).run(|build| {
     ///     build.cargo_json()
-    ///         .capture_cargo_messages(&messages)
+    ///         .capture_cargo_messages(&mut |message| {
+    ///             if message.pointer("/message/level").and_then(|level| level.as_str()) == Some("error") {
+    ///                 errors.push(message.clone());
+    ///             }
+    ///         })
     ///         .process_lines(&mut |diagnostic, _| {
     ///             // `diagnostic` is the rendered, user-readable compiler message.
     ///         })
@@ -404,11 +408,11 @@ impl<'ws> Build<'ws> {
     ///     Ok(())
     /// })?;
     ///
-    /// let errors = messages.errors();
+    /// assert!(errors.is_empty());
     /// # Ok(())
     /// # }
     /// ```
-    pub fn cargo_json<'pl>(&self) -> Command<'ws, 'pl> {
+    pub fn cargo_json<'pl, 'cm>(&self) -> Command<'ws, 'pl, 'cm> {
         self.cargo().render_cargo_messages()
     }
 
