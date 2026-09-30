@@ -355,6 +355,9 @@ impl<'w> Command<'w, '_> {
 
     /// Set the function that will be called each time a line is outputted to either the standard
     /// output or the standard error. Only one function can be set at any time for a command.
+    /// When used with [`Build::cargo_json`](crate::Build::cargo_json), compiler diagnostics are
+    /// passed as their rendered text; Cargo protocol records are available through
+    /// [`CargoMessages`] instead.
     ///
     /// For sandboxed commands, the callback runs while the underlying [`Sandbox`] is mutably
     /// borrowed. Spawning another sandboxed command (e.g. via [`Build::cmd`](../build/struct.Build.html#method.cmd))
@@ -412,9 +415,9 @@ impl<'w> Command<'w, '_> {
     /// Render Cargo JSON messages before logging them.
     ///
     /// This is intended for commands run with Cargo's
-    /// `--message-format=json` option. The original JSON line is still passed to
-    /// [`process_lines`](Self::process_lines), allowing callers to deserialize it, while compiler
-    /// diagnostics are rendered in the log output.
+    /// `--message-format=json` option. Compiler diagnostics are rendered before they are passed
+    /// to [`process_lines`](Self::process_lines) and the log output. Raw parsed messages can be
+    /// collected with [`capture_cargo_messages`](Self::capture_cargo_messages).
     pub(crate) fn render_cargo_messages(mut self) -> Self {
         self.render_cargo_messages = true;
         self
@@ -425,6 +428,8 @@ impl<'w> Command<'w, '_> {
     /// This is intended for commands run with `--message-format=json`, such as those returned by
     /// [`Build::cargo_json`](crate::Build::cargo_json). Messages are captured even when the
     /// command fails, so callers can inspect compiler diagnostics after `run` returns an error.
+    /// When used with [`Build::cargo_json`](crate::Build::cargo_json), this is the raw Cargo
+    /// protocol channel; [`process_lines`](Self::process_lines) receives rendered diagnostics.
     pub fn capture_cargo_messages(mut self, messages: &CargoMessages) -> Self {
         self.cargo_messages = Some(messages.clone());
         self
@@ -739,17 +744,21 @@ async fn log_command(
             let cargo_message = (render_cargo_messages || cargo_messages.is_some())
                 .then(|| parse_cargo_message(&line))
                 .flatten();
-            if let Some(message) = &cargo_message {
+            let callback_line = if let Some(message) = &cargo_message {
                 if let Some(messages) = &cargo_messages {
                     messages.push(message.clone());
                 }
                 if render_cargo_messages {
-                    render_cargo_message(message, &mut actions);
+                    render_cargo_message(message, &mut actions)
+                } else {
+                    Some(line.as_str())
                 }
-            }
+            } else {
+                Some(line.as_str())
+            };
 
-            if let Some(f) = &mut process_lines {
-                f(&line, &mut actions);
+            if let (Some(f), Some(callback_line)) = (&mut process_lines, callback_line) {
+                f(callback_line, &mut actions);
             }
             // this is done here to avoid duplicating the output line
             let lines = match actions.take_lines() {
@@ -818,7 +827,10 @@ fn parse_cargo_message(line: &str) -> Option<serde_json::Value> {
     Some(message)
 }
 
-fn render_cargo_message(message: &serde_json::Value, actions: &mut ProcessLinesActions) {
+fn render_cargo_message<'a>(
+    message: &'a serde_json::Value,
+    actions: &mut ProcessLinesActions,
+) -> Option<&'a str> {
     let reason = message
         .get("reason")
         .and_then(serde_json::Value::as_str)
@@ -826,15 +838,21 @@ fn render_cargo_message(message: &serde_json::Value, actions: &mut ProcessLinesA
 
     if reason != "compiler-message" {
         actions.remove_line();
-        return;
+        return None;
     }
 
     match message
         .pointer("/message/rendered")
         .and_then(serde_json::Value::as_str)
     {
-        Some(rendered) => actions.replace_with_lines(rendered.lines()),
-        None => actions.remove_line(),
+        Some(rendered) => {
+            actions.replace_with_lines(rendered.lines());
+            Some(rendered)
+        }
+        None => {
+            actions.remove_line();
+            None
+        }
     }
 }
 
@@ -888,12 +906,15 @@ mod tests {
     #[test]
     fn renders_compiler_diagnostics_from_cargo_json() {
         let mut actions = ProcessLinesActions::new();
-        render_cargo_message(
-            &parse_cargo_message(
-                r#"{"reason":"compiler-message","message":{"rendered":"error: something went wrong\n  --> src/lib.rs:1:1\n"}}"#,
-            )
-            .unwrap(),
-            &mut actions,
+        let message = parse_cargo_message(
+            r#"{"reason":"compiler-message","message":{"rendered":"error: something went wrong\n  --> src/lib.rs:1:1\n"}}"#,
+        )
+        .unwrap();
+        let rendered = render_cargo_message(&message, &mut actions);
+
+        assert_eq!(
+            rendered,
+            Some("error: something went wrong\n  --> src/lib.rs:1:1\n")
         );
 
         assert_eq!(
@@ -908,9 +929,12 @@ mod tests {
     #[test]
     fn hides_non_diagnostic_cargo_json_messages() {
         let mut actions = ProcessLinesActions::new();
-        render_cargo_message(
-            &parse_cargo_message(r#"{"reason":"compiler-artifact"}"#).unwrap(),
-            &mut actions,
+        assert_eq!(
+            render_cargo_message(
+                &parse_cargo_message(r#"{"reason":"compiler-artifact"}"#).unwrap(),
+                &mut actions,
+            ),
+            None
         );
 
         assert_eq!(actions.take_lines(), InnerState::Removed);
