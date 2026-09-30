@@ -219,12 +219,7 @@ pub struct Command<'w, 'pl, 'cm> {
     no_output_timeout: Option<Duration>,
     log_command: bool,
     log_output: bool,
-    cargo_messages: Option<CargoMessages<'cm>>,
-}
-
-pub(crate) enum CargoMessages<'cm> {
-    Render,
-    Capture(&'cm mut dyn FnMut(&serde_json::Value)),
+    cargo_messages: Option<&'cm mut dyn FnMut(&serde_json::Value)>,
 }
 
 // Custom Debug keeps command output focused: environment variables are shown as keys only,
@@ -243,13 +238,7 @@ impl fmt::Debug for Command<'_, '_, '_> {
             .field("no_output_timeout", &self.no_output_timeout)
             .field("log_command", &self.log_command)
             .field("log_output", &self.log_output)
-            .field(
-                "cargo_messages",
-                &self.cargo_messages.as_ref().map(|messages| match messages {
-                    CargoMessages::Render => "render",
-                    CargoMessages::Capture(_) => "capture",
-                }),
-            )
+            .field("cargo_messages", &self.cargo_messages.is_some())
             .finish()
     }
 }
@@ -373,19 +362,6 @@ impl<'w> Command<'w, '_, '_> {
     /// [log]: https://crates.io/crates/log
     pub fn log_command(mut self, log_command: bool) -> Self {
         self.log_command = log_command;
-        self
-    }
-
-    /// Render Cargo JSON messages before logging them.
-    ///
-    /// This is intended for commands run with Cargo's `--message-format=json` option. Compiler
-    /// diagnostics are rendered before they are passed to [`process_lines`](Self::process_lines)
-    /// and the log output. Raw parsed messages can be collected with
-    /// [`capture_cargo_messages`](Self::capture_cargo_messages).
-    pub(crate) fn render_cargo_messages(mut self) -> Self {
-        if self.cargo_messages.is_none() {
-            self.cargo_messages = Some(CargoMessages::Render);
-        }
         self
     }
 
@@ -544,10 +520,9 @@ impl<'w, 'pl, 'cm> Command<'w, 'pl, 'cm> {
     /// Set the function that will be called each time a line is outputted to either standard
     /// output or standard error. Only one function can be set at any time for a command.
     ///
-    /// With [`Build::cargo_json`](crate::Build::cargo_json), the callback is called for rendered
-    /// compiler diagnostics, which can contain multiple lines. Cargo protocol records, including
-    /// artifacts and build-script output, are available through
-    /// [`capture_cargo_messages`](Self::capture_cargo_messages) instead.
+    /// With [`capture_cargo_messages`](Self::capture_cargo_messages), the callback is called for
+    /// rendered compiler diagnostics, which can contain multiple lines. Cargo protocol records,
+    /// including artifacts and build-script output, are available through that callback instead.
     ///
     /// This example builds a crate and detects compiler errors (ICEs):
     ///
@@ -580,19 +555,36 @@ impl<'w, 'pl, 'cm> Command<'w, 'pl, 'cm> {
 
     /// Process parsed Cargo JSON messages as the command runs.
     ///
-    /// This is intended for commands run with `--message-format=json`, such as those returned by
-    /// [`Build::cargo_json`](crate::Build::cargo_json). The callback runs even when the command
+    /// This adds Cargo's `--message-format=json` option. The callback runs even when the command
     /// fails, so callers can retain compiler diagnostics after `run` returns an error.
     ///
     /// The callback receives the raw parsed Cargo protocol message. Registering a callback also
     /// enables rendering for [`process_lines`](Self::process_lines), the log output, and
     /// [`run_capture`](Self::run_capture).
+    ///
+    /// ```no_run
+    /// # use rustwide::{cmd::Command, WorkspaceBuilder};
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error>> {
+    /// # let workspace = WorkspaceBuilder::new("".as_ref(), "").init()?;
+    /// let mut errors = Vec::new();
+    /// Command::new(&workspace, "cargo")
+    ///     .args(["check"])
+    ///     .capture_cargo_messages(&mut |message| {
+    ///         if message.pointer("/message/level").and_then(|level| level.as_str()) == Some("error") {
+    ///             errors.push(message.clone());
+    ///         }
+    ///     })
+    ///     .run()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn capture_cargo_messages<'new>(
         self,
         f: &'new mut dyn FnMut(&serde_json::Value),
     ) -> Command<'w, 'pl, 'new> {
         Command {
-            cargo_messages: Some(CargoMessages::Capture(f)),
+            cargo_messages: Some(f),
             ..self
         }
     }
@@ -655,7 +647,7 @@ async fn log_command(
     timeout: Option<Duration>,
     no_output_timeout: Option<Duration>,
     log_output: bool,
-    mut cargo_messages: Option<CargoMessages<'_>>,
+    mut cargo_messages: Option<&mut dyn FnMut(&serde_json::Value)>,
 ) -> Result<InnerProcessOutput, CommandError> {
     let timeout = timeout.unwrap_or_else(|| Duration::from_secs(u32::MAX as u64));
     let no_output_timeout = no_output_timeout.unwrap_or(timeout);
@@ -698,7 +690,7 @@ async fn log_command(
                 .then(|| parse_cargo_message(&line))
                 .flatten();
             let callback_line = if let Some(message) = &cargo_message {
-                if let Some(CargoMessages::Capture(f)) = &mut cargo_messages {
+                if let Some(f) = &mut cargo_messages {
                     f(message);
                 }
                 render_cargo_message(message, &mut actions)
@@ -921,9 +913,7 @@ mod tests {
                 None,
                 None,
                 false,
-                Some(CargoMessages::Capture(&mut |message| {
-                    messages.push(message.clone())
-                })),
+                Some(&mut |message| messages.push(message.clone())),
             ))
             .unwrap();
 

@@ -4,9 +4,7 @@ mod docker;
 use crate::cmd::sandbox::docker::HostCgroup;
 use crate::{
     Workspace,
-    cmd::{
-        CargoMessages, Command, CommandError, ProcessLinesActions, ProcessOutput, container_dirs,
-    },
+    cmd::{Command, CommandError, ProcessLinesActions, ProcessOutput, container_dirs},
 };
 use docker::CgroupStatsReader;
 use log::{error, info};
@@ -767,7 +765,7 @@ impl Container<'_> {
         process_lines: Option<&mut dyn FnMut(&str, &mut ProcessLinesActions)>,
         log_output: bool,
         log_command: bool,
-        cargo_messages: Option<CargoMessages<'_>>,
+        cargo_messages: Option<&mut dyn FnMut(&serde_json::Value)>,
         capture: bool,
     ) -> (SandboxStatistics, Result<ProcessOutput, CommandError>) {
         // Build the `docker exec` command with env/workdir/user from the sandbox config
@@ -795,11 +793,8 @@ impl Container<'_> {
             .log_command(log_command)
             .no_output_timeout(no_output_timeout);
 
-        if let Some(cargo_messages) = cargo_messages {
-            cmd = match cargo_messages {
-                CargoMessages::Render => cmd.render_cargo_messages(),
-                CargoMessages::Capture(f) => cmd.capture_cargo_messages(f),
-            };
+        if let Some(f) = cargo_messages {
+            cmd = cmd.capture_cargo_messages(f);
         }
 
         if let Some(f) = process_lines {
@@ -971,7 +966,7 @@ impl<'w> Sandbox<'w> {
         process_lines: Option<&mut dyn FnMut(&str, &mut ProcessLinesActions)>,
         log_output: bool,
         log_command: bool,
-        cargo_messages: Option<CargoMessages<'_>>,
+        cargo_messages: Option<&mut dyn FnMut(&serde_json::Value)>,
         capture: bool,
     ) -> Result<ProcessOutput, CommandError> {
         let container_workdir = match command.workdir {
