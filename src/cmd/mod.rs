@@ -406,9 +406,9 @@ impl<'w> Command<'w, '_> {
     /// Render Cargo JSON messages before logging them.
     ///
     /// This is intended for commands run with Cargo's
-    /// `--message-format=json-render-diagnostics` option. The original JSON line is still passed
-    /// to [`process_lines`](Self::process_lines), allowing callers to deserialize it, while
-    /// compiler diagnostics are rendered in the log output.
+    /// `--message-format=json` option. The original JSON line is still passed to
+    /// [`process_lines`](Self::process_lines), allowing callers to deserialize it, while compiler
+    /// diagnostics are rendered in the log output.
     pub(crate) fn render_cargo_messages(mut self) -> Self {
         self.render_cargo_messages = true;
         self
@@ -756,7 +756,7 @@ fn cargo_message_format_args(mut args: Vec<OsString>) -> Vec<OsString> {
         .iter()
         .position(|arg| arg == "--")
         .unwrap_or(args.len());
-    args.insert(position, "--message-format=json-render-diagnostics".into());
+    args.insert(position, "--message-format=json".into());
     args
 }
 
@@ -843,7 +843,7 @@ mod tests {
             [
                 "run",
                 "--release",
-                "--message-format=json-render-diagnostics",
+                "--message-format=json",
                 "--",
                 "argument",
             ]

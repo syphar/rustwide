@@ -373,9 +373,9 @@ impl<'ws> Build<'ws> {
 
     /// Run a Cargo build command with JSON messages.
     ///
-    /// This adds Cargo's `--message-format=json-render-diagnostics` option. Raw JSON messages
-    /// are passed to [`Command::process_lines`], so they can be deserialized by the caller,
-    /// while rendered compiler diagnostics are logged normally and can be captured by
+    /// This adds Cargo's `--message-format=json` option. Raw JSON messages are passed to
+    /// [`Command::process_lines`], so they can be deserialized by the caller, while rendered
+    /// compiler diagnostics are logged normally and can be captured by
     /// [`LogStorage`](crate::logging::LogStorage).
     ///
     /// This method is for Cargo commands that support `--message-format`, such as `build`,
