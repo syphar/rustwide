@@ -219,6 +219,7 @@ pub struct Command<'w, 'pl> {
     no_output_timeout: Option<Duration>,
     log_command: bool,
     log_output: bool,
+    render_cargo_messages: bool,
 }
 
 // Custom Debug keeps command output focused: environment variables are shown as keys only,
@@ -237,6 +238,7 @@ impl fmt::Debug for Command<'_, '_> {
             .field("no_output_timeout", &self.no_output_timeout)
             .field("log_command", &self.log_command)
             .field("log_output", &self.log_output)
+            .field("render_cargo_messages", &self.render_cargo_messages)
             .finish()
     }
 }
@@ -294,6 +296,7 @@ impl<'w> Command<'w, '_> {
             no_output_timeout,
             log_output: true,
             log_command: true,
+            render_cargo_messages: false,
         }
     }
 
@@ -400,6 +403,17 @@ impl<'w> Command<'w, '_> {
         self
     }
 
+    /// Render Cargo JSON messages before logging them.
+    ///
+    /// This is intended for commands run with Cargo's
+    /// `--message-format=json-render-diagnostics` option. The original JSON line is still passed
+    /// to [`process_lines`](Self::process_lines), allowing callers to deserialize it, while
+    /// compiler diagnostics are rendered in the log output.
+    pub(crate) fn render_cargo_messages(mut self) -> Self {
+        self.render_cargo_messages = true;
+        self
+    }
+
     /// Run the prepared command and return an error if it fails (for example with a non-zero exit
     /// code or a timeout).
     pub fn run(self) -> Result<(), CommandError> {
@@ -427,8 +441,13 @@ impl<'w> Command<'w, '_> {
                 }
             };
 
+            let args = if self.render_cargo_messages {
+                cargo_message_format_args(self.args)
+            } else {
+                self.args
+            };
             let mut command = SandboxCommand::new(binary)
-                .args(self.args)
+                .args(args)
                 .env("SOURCE_DIR", &*container_dirs::WORK_DIR)
                 .env("CARGO_HOME", &*container_dirs::CARGO_HOME)
                 .env("RUSTUP_HOME", &*container_dirs::RUSTUP_HOME);
@@ -455,6 +474,7 @@ impl<'w> Command<'w, '_> {
                     self.process_lines,
                     self.log_output,
                     self.log_command,
+                    self.render_cargo_messages,
                     capture,
                 )
         } else {
@@ -474,9 +494,14 @@ impl<'w> Command<'w, '_> {
                 }
             };
 
-            let cmdstr = format_command(binary.as_os_str(), &self.args);
+            let args = if self.render_cargo_messages {
+                cargo_message_format_args(self.args)
+            } else {
+                self.args
+            };
+            let cmdstr = format_command(binary.as_os_str(), &args);
             let mut cmd = AsyncCommand::new(binary);
-            cmd.args(&self.args);
+            cmd.args(&args);
 
             if managed_by_rustwide {
                 let workspace = self
@@ -521,6 +546,7 @@ impl<'w> Command<'w, '_> {
                     self.timeout,
                     self.no_output_timeout,
                     self.log_output,
+                    self.render_cargo_messages,
                 ))
                 .map_err(|e| {
                     error!("error running command: {e}");
@@ -596,6 +622,7 @@ async fn log_command(
     timeout: Option<Duration>,
     no_output_timeout: Option<Duration>,
     log_output: bool,
+    render_cargo_messages: bool,
 ) -> Result<InnerProcessOutput, CommandError> {
     let timeout = timeout.unwrap_or_else(|| Duration::from_secs(u32::MAX as u64));
     let no_output_timeout = no_output_timeout.unwrap_or(timeout);
@@ -631,6 +658,10 @@ async fn log_command(
             // be executed, so this extra check prevents the process to run without limits.
             if start.elapsed() > timeout {
                 return future::err(CommandError::Timeout(timeout.as_secs()));
+            }
+
+            if render_cargo_messages {
+                render_cargo_message(&line, &mut actions);
             }
 
             if let Some(f) = &mut process_lines {
@@ -697,6 +728,38 @@ async fn log_command(
     })
 }
 
+fn render_cargo_message(line: &str, actions: &mut ProcessLinesActions) {
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+
+    let Some(reason) = message.get("reason").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+
+    if reason != "compiler-message" {
+        actions.remove_line();
+        return;
+    }
+
+    match message
+        .pointer("/message/rendered")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(rendered) => actions.replace_with_lines(rendered.lines()),
+        None => actions.remove_line(),
+    }
+}
+
+fn cargo_message_format_args(mut args: Vec<OsString>) -> Vec<OsString> {
+    let position = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    args.insert(position, "--message-format=json-render-diagnostics".into());
+    args
+}
+
 fn format_command<S1, S2, I>(binary: S1, args: I) -> OsString
 where
     S1: AsRef<OsStr>,
@@ -723,6 +786,7 @@ fn exe_suffix(file: &OsStr) -> OsString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd::process_lines_actions::InnerState;
 
     #[test]
     fn formats_only_the_program_and_arguments() {
@@ -731,6 +795,59 @@ mod tests {
         assert_eq!(
             format_command(OsStr::new("/path/to/program"), args),
             r#""program" "argument" "argument with spaces""#
+        );
+    }
+
+    #[test]
+    fn renders_compiler_diagnostics_from_cargo_json() {
+        let mut actions = ProcessLinesActions::new();
+        render_cargo_message(
+            r#"{"reason":"compiler-message","message":{"rendered":"error: something went wrong\n  --> src/lib.rs:1:1\n"}}"#,
+            &mut actions,
+        );
+
+        assert_eq!(
+            actions.take_lines(),
+            InnerState::Replaced(vec![
+                "error: something went wrong".into(),
+                "  --> src/lib.rs:1:1".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn hides_non_diagnostic_cargo_json_messages() {
+        let mut actions = ProcessLinesActions::new();
+        render_cargo_message(r#"{"reason":"compiler-artifact"}"#, &mut actions);
+
+        assert_eq!(actions.take_lines(), InnerState::Removed);
+    }
+
+    #[test]
+    fn preserves_non_json_output_from_the_built_binary() {
+        let mut actions = ProcessLinesActions::new();
+        render_cargo_message("Hello, world!", &mut actions);
+
+        assert_eq!(actions.take_lines(), InnerState::Original);
+    }
+
+    #[test]
+    fn adds_cargo_message_format_before_program_arguments() {
+        assert_eq!(
+            cargo_message_format_args(
+                ["run", "--release", "--", "argument"]
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
+            [
+                "run",
+                "--release",
+                "--message-format=json-render-diagnostics",
+                "--",
+                "argument",
+            ]
+            .map(OsString::from)
         );
     }
 }

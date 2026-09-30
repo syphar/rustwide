@@ -765,6 +765,7 @@ impl Container<'_> {
         process_lines: Option<&mut dyn FnMut(&str, &mut ProcessLinesActions)>,
         log_output: bool,
         log_command: bool,
+        render_cargo_messages: bool,
         capture: bool,
     ) -> (SandboxStatistics, Result<ProcessOutput, CommandError>) {
         // Build the `docker exec` command with env/workdir/user from the sandbox config
@@ -791,6 +792,10 @@ impl Container<'_> {
             .log_output(log_output)
             .log_command(log_command)
             .no_output_timeout(no_output_timeout);
+
+        if render_cargo_messages {
+            cmd = cmd.render_cargo_messages();
+        }
 
         if let Some(f) = process_lines {
             cmd = cmd.process_lines(f);
@@ -961,6 +966,7 @@ impl<'w> Sandbox<'w> {
         process_lines: Option<&mut dyn FnMut(&str, &mut ProcessLinesActions)>,
         log_output: bool,
         log_command: bool,
+        render_cargo_messages: bool,
         capture: bool,
     ) -> Result<ProcessOutput, CommandError> {
         let container_workdir = match command.workdir {
@@ -981,6 +987,7 @@ impl<'w> Sandbox<'w> {
             process_lines,
             log_output,
             log_command,
+            render_cargo_messages,
             capture,
         );
         self.statistics.merge(statistics);

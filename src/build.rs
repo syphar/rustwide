@@ -371,6 +371,19 @@ impl<'ws> Build<'ws> {
         self.cmd(self.toolchain.cargo())
     }
 
+    /// Run a Cargo build command with JSON messages.
+    ///
+    /// This adds Cargo's `--message-format=json-render-diagnostics` option. Raw JSON messages
+    /// are passed to [`Command::process_lines`], so they can be deserialized by the caller,
+    /// while rendered compiler diagnostics are logged normally and can be captured by
+    /// [`LogStorage`](crate::logging::LogStorage).
+    ///
+    /// This method is for Cargo commands that support `--message-format`, such as `build`,
+    /// `check`, `test`, `run`, and `rustc`. Use [`cargo`](Self::cargo) for other Cargo commands.
+    pub fn cargo_json<'pl>(&self) -> Command<'ws, 'pl> {
+        self.cargo().render_cargo_messages()
+    }
+
     /// Snapshot the sandbox statistics (e.g. peak memory) gathered so far in
     /// this build. The same data is available on the [`BuildResult`] returned
     /// from [`BuildBuilder::run`]; this method exposes it mid-build, e.g. for
