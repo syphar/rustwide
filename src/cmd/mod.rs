@@ -219,8 +219,12 @@ pub struct Command<'w, 'pl, 'cm> {
     no_output_timeout: Option<Duration>,
     log_command: bool,
     log_output: bool,
-    render_cargo_messages: bool,
-    cargo_messages: Option<&'cm mut dyn FnMut(&serde_json::Value)>,
+    cargo_messages: Option<CargoMessages<'cm>>,
+}
+
+pub(crate) enum CargoMessages<'cm> {
+    Render,
+    Capture(&'cm mut dyn FnMut(&serde_json::Value)),
 }
 
 // Custom Debug keeps command output focused: environment variables are shown as keys only,
@@ -239,10 +243,12 @@ impl fmt::Debug for Command<'_, '_, '_> {
             .field("no_output_timeout", &self.no_output_timeout)
             .field("log_command", &self.log_command)
             .field("log_output", &self.log_output)
-            .field("render_cargo_messages", &self.render_cargo_messages)
             .field(
-                "has_cargo_messages_callback",
-                &self.cargo_messages.is_some(),
+                "cargo_messages",
+                &self.cargo_messages.as_ref().map(|messages| match messages {
+                    CargoMessages::Render => "render",
+                    CargoMessages::Capture(_) => "capture",
+                }),
             )
             .finish()
     }
@@ -301,7 +307,6 @@ impl<'w> Command<'w, '_, '_> {
             no_output_timeout,
             log_output: true,
             log_command: true,
-            render_cargo_messages: false,
             cargo_messages: None,
         }
     }
@@ -378,7 +383,9 @@ impl<'w> Command<'w, '_, '_> {
     /// and the log output. Raw parsed messages can be collected with
     /// [`capture_cargo_messages`](Self::capture_cargo_messages).
     pub(crate) fn render_cargo_messages(mut self) -> Self {
-        self.render_cargo_messages = true;
+        if self.cargo_messages.is_none() {
+            self.cargo_messages = Some(CargoMessages::Render);
+        }
         self
     }
 
@@ -409,7 +416,7 @@ impl<'w> Command<'w, '_, '_> {
                 }
             };
 
-            let args = if self.render_cargo_messages {
+            let args = if self.cargo_messages.is_some() {
                 cargo_message_format_args(self.args)
             } else {
                 self.args
@@ -442,7 +449,6 @@ impl<'w> Command<'w, '_, '_> {
                     self.process_lines,
                     self.log_output,
                     self.log_command,
-                    self.render_cargo_messages,
                     self.cargo_messages,
                     capture,
                 )
@@ -463,7 +469,7 @@ impl<'w> Command<'w, '_, '_> {
                 }
             };
 
-            let args = if self.render_cargo_messages {
+            let args = if self.cargo_messages.is_some() {
                 cargo_message_format_args(self.args)
             } else {
                 self.args
@@ -515,7 +521,6 @@ impl<'w> Command<'w, '_, '_> {
                     self.timeout,
                     self.no_output_timeout,
                     self.log_output,
-                    self.render_cargo_messages,
                     self.cargo_messages,
                 ))
                 .map_err(|e| {
@@ -587,8 +592,7 @@ impl<'w, 'pl, 'cm> Command<'w, 'pl, 'cm> {
         f: &'new mut dyn FnMut(&serde_json::Value),
     ) -> Command<'w, 'pl, 'new> {
         Command {
-            cargo_messages: Some(f),
-            render_cargo_messages: true,
+            cargo_messages: Some(CargoMessages::Capture(f)),
             ..self
         }
     }
@@ -651,8 +655,7 @@ async fn log_command(
     timeout: Option<Duration>,
     no_output_timeout: Option<Duration>,
     log_output: bool,
-    render_cargo_messages: bool,
-    mut cargo_messages: Option<&mut dyn FnMut(&serde_json::Value)>,
+    mut cargo_messages: Option<CargoMessages<'_>>,
 ) -> Result<InnerProcessOutput, CommandError> {
     let timeout = timeout.unwrap_or_else(|| Duration::from_secs(u32::MAX as u64));
     let no_output_timeout = no_output_timeout.unwrap_or(timeout);
@@ -690,18 +693,15 @@ async fn log_command(
                 return future::err(CommandError::Timeout(timeout.as_secs()));
             }
 
-            let cargo_message = (render_cargo_messages || cargo_messages.is_some())
+            let cargo_message = cargo_messages
+                .is_some()
                 .then(|| parse_cargo_message(&line))
                 .flatten();
             let callback_line = if let Some(message) = &cargo_message {
-                if let Some(f) = &mut cargo_messages {
+                if let Some(CargoMessages::Capture(f)) = &mut cargo_messages {
                     f(message);
                 }
-                if render_cargo_messages {
-                    render_cargo_message(message, &mut actions)
-                } else {
-                    Some(line.as_str())
-                }
+                render_cargo_message(message, &mut actions)
             } else {
                 Some(line.as_str())
             };
@@ -921,8 +921,9 @@ mod tests {
                 None,
                 None,
                 false,
-                true,
-                Some(&mut |message| messages.push(message.clone())),
+                Some(CargoMessages::Capture(&mut |message| {
+                    messages.push(message.clone())
+                })),
             ))
             .unwrap();
 
