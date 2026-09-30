@@ -376,7 +376,7 @@ impl<'ws> Build<'ws> {
     /// This adds Cargo's `--message-format=json` option. Compiler diagnostics are rendered for
     /// [`Command::process_lines`] and [`LogStorage`](crate::logging::LogStorage), while raw
     /// parsed Cargo protocol messages can be collected with
-    /// [`Command::capture_cargo_messages`].
+    /// [`Command::capture_cargo_messages`] or [`Command::run_capture`].
     ///
     /// This method is for Cargo commands that support `--message-format`, such as `build`,
     /// `check`, `test`, `run`, and `rustc`. Use [`cargo`](Self::cargo) for other Cargo commands.

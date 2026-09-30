@@ -547,7 +547,8 @@ impl<'w, 'pl, 'cm> Command<'w, 'pl, 'cm> {
     /// With [`Build::cargo_json`](crate::Build::cargo_json), the callback is called for rendered
     /// compiler diagnostics, which can contain multiple lines. Cargo protocol records, including
     /// artifacts and build-script output, are available through
-    /// [`capture_cargo_messages`](Self::capture_cargo_messages) instead.
+    /// [`capture_cargo_messages`](Self::capture_cargo_messages) or
+    /// [`run_capture`](Self::run_capture) instead.
     ///
     /// This example builds a crate and detects compiler errors (ICEs):
     ///
@@ -585,8 +586,8 @@ impl<'w, 'pl, 'cm> Command<'w, 'pl, 'cm> {
     /// fails, so callers can retain compiler diagnostics after `run` returns an error.
     ///
     /// The callback receives the raw parsed Cargo protocol message. Registering a callback also
-    /// enables rendering: [`process_lines`](Self::process_lines) and
-    /// [`run_capture`](Self::run_capture) receive rendered diagnostics instead.
+    /// enables rendering for [`process_lines`](Self::process_lines) and the log output.
+    /// [`run_capture`](Self::run_capture) retains the original Cargo JSON lines.
     pub fn capture_cargo_messages<'new>(
         self,
         f: &'new mut dyn FnMut(&serde_json::Value),
@@ -710,10 +711,19 @@ async fn log_command(
                 f(callback_line, &mut actions);
             }
             // this is done here to avoid duplicating the output line
+            let original_cargo_line = cargo_message.is_some().then(|| line.clone());
             let lines = match actions.take_lines() {
                 InnerState::Removed => Vec::new(),
                 InnerState::Original => vec![line],
                 InnerState::Replaced(new_lines) => new_lines,
+            };
+
+            // Rendering Cargo messages is only for the presentation path. Keep the original
+            // protocol line in `run_capture()` so callers can deserialize it themselves.
+            let captured_lines = if let Some(line) = original_cargo_line {
+                vec![line]
+            } else {
+                lines.clone()
             };
 
             if log_output {
@@ -722,17 +732,17 @@ async fn log_command(
                 }
             }
 
-            future::ok((kind, lines))
+            future::ok((kind, lines, captured_lines))
         })
         .try_fold(
             (Vec::<String>::new(), Vec::<String>::new()),
-            move |(mut stdout, mut stderr), (kind, mut lines)| async move {
+            move |(mut stdout, mut stderr), (kind, _lines, mut captured_lines)| async move {
                 // If stdio/stdout is supposed to be captured, append it to
                 // the accumulated stdio/stdout
                 if capture {
                     match kind {
-                        OutputKind::Stdout => stdout.append(&mut lines),
-                        OutputKind::Stderr => stderr.append(&mut lines),
+                        OutputKind::Stdout => stdout.append(&mut captured_lines),
+                        OutputKind::Stderr => stderr.append(&mut captured_lines),
                     }
                 }
 
@@ -929,7 +939,10 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["reason"], "compiler-message");
-        assert_eq!(output.stdout, ["error: example"]);
+        assert_eq!(
+            output.stdout,
+            [r#"{"reason":"compiler-message","message":{"rendered":"error: example\n"}}"#]
+        );
     }
 
     #[test]
